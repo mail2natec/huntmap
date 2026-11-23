@@ -1,0 +1,817 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Hunt Map">
+<meta name="theme-color" content="#18201a">
+<title>Roanoke Hunt Map</title>
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<style>
+  :root{--bg:#18201a;--panel:#222c24;--line:#36443a;--text:#eef2ea;--muted:#a9b5a6;--accent:#ff8a1f;--green:#4cc463;--danger:#e5534b;}
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font:15px/1.35 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;overflow:hidden}
+  #map{position:absolute;inset:0}
+  button{font:inherit;color:inherit;border:0;background:none;cursor:pointer}
+  .btn{background:#2f3b32;border:1px solid var(--line);border-radius:10px;padding:10px 14px;font-weight:600}
+  .btn.primary{background:var(--accent);border-color:var(--accent);color:#1b1205}
+  .btn.danger{background:transparent;border-color:var(--danger);color:#ff8f88}
+  .btn.small{padding:6px 10px;font-size:13px}
+  #topbar{position:absolute;top:0;left:0;right:0;padding:calc(env(safe-area-inset-top) + 8px) 10px 8px;display:flex;gap:8px;align-items:center;pointer-events:none;z-index:5}
+  #topbar>*{pointer-events:auto}
+  .chip{background:rgba(24,32,26,.88);border:1px solid var(--line);border-radius:999px;padding:6px 12px;font-size:13px;backdrop-filter:blur(6px)}
+  #title{font-weight:700}
+  #syncChip{margin-left:auto}
+  #hint{position:absolute;top:calc(env(safe-area-inset-top) + 52px);left:50%;transform:translateX(-50%);z-index:5;display:none;white-space:nowrap}
+  #toolbar{position:absolute;left:50%;transform:translateX(-50%);bottom:calc(env(safe-area-inset-bottom) + 12px);width:min(94vw,460px);z-index:6;display:flex;justify-content:space-around;background:rgba(24,32,26,.94);border:1px solid var(--line);border-radius:20px;padding:6px 4px;box-shadow:0 4px 18px rgba(0,0,0,.45);backdrop-filter:blur(8px)}
+  #toolbar button{display:flex;flex-direction:column;align-items:center;gap:2px;font-size:11px;color:var(--muted);padding:5px 6px;min-width:56px;border-radius:14px}
+  #toolbar button span.i{font-size:21px;line-height:1}
+  #toolbar button.on{color:var(--accent);background:rgba(255,138,31,.12)}
+  #toolbar button.rec{color:#ff5a4f}
+  .float{position:absolute;z-index:6;bottom:calc(env(safe-area-inset-bottom) + 84px)}
+  #layersBtn{left:12px;display:flex;align-items:center;gap:8px;background:#f4f4ef;color:#1d231f;border-radius:14px;padding:8px 14px 8px 10px;font-weight:700;font-size:14px;box-shadow:0 2px 10px rgba(0,0,0,.4)}
+  #layersBtn svg{width:22px;height:22px}
+  #rightBtns{right:12px;display:flex;flex-direction:column;gap:8px}
+  .fbtn{width:48px;height:48px;border-radius:50%;background:#f4f4ef;color:#1d231f;font-weight:800;font-size:13px;box-shadow:0 2px 10px rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center}
+  .fbtn.on{background:var(--accent);color:#1b1205}
+  .fbtn svg{width:24px;height:24px}
+  body.moding .float{display:none!important}
+  .maplibregl-ctrl-group:has(.maplibregl-ctrl-geolocate){display:none}
+  #actionbar{position:absolute;left:8px;right:8px;bottom:calc(env(safe-area-inset-bottom) + 84px);z-index:7;display:none;background:rgba(24,32,26,.96);border:1px solid var(--line);border-radius:14px;padding:10px;gap:8px;flex-wrap:wrap;align-items:center}
+  #actionbar .msg{flex:1 1 100%;font-size:14px;color:var(--muted)}
+  #actionbar .msg b{color:var(--text)}
+  #crosshair{position:absolute;left:50%;top:50%;width:44px;height:44px;margin:-22px 0 0 -22px;z-index:4;display:none;pointer-events:none}
+  #crosshair:before,#crosshair:after{content:"";position:absolute;background:#fff;box-shadow:0 0 0 1px #000}
+  #crosshair:before{left:21px;top:0;width:2px;height:44px}
+  #crosshair:after{top:21px;left:0;height:2px;width:44px}
+  .sheet-wrap{position:absolute;inset:0;z-index:20;background:rgba(0,0,0,.45);display:none;align-items:flex-end;justify-content:center}
+  .sheet{width:100%;max-width:560px;max-height:86vh;overflow:auto;background:var(--panel);border-radius:18px 18px 0 0;padding:16px 16px calc(env(safe-area-inset-bottom) + 16px);border-top:1px solid var(--line)}
+  .sheet h2{margin:0 0 12px;font-size:18px}
+  .sheet h3{margin:18px 0 8px;font-size:14px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+  label{display:block;font-size:13px;color:var(--muted);margin:10px 0 4px}
+  input[type=text],input[type=password],textarea,select{width:100%;background:#151c17;border:1px solid var(--line);color:var(--text);border-radius:10px;padding:10px;font:inherit}
+  textarea{min-height:80px;resize:vertical}
+  .row{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
+  .row>.btn{flex:1}
+  .typegrid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
+  .typegrid button{background:#151c17;border:1px solid var(--line);border-radius:10px;padding:8px 2px;font-size:11px;display:flex;flex-direction:column;align-items:center;gap:3px}
+  .typegrid button .e{font-size:22px}
+  .typegrid button.sel{border-color:var(--accent);background:#3a2c18}
+  .toggle{display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--line)}
+  .toggle input{width:22px;height:22px}
+  .seg{display:flex;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+  .seg button{flex:1;padding:9px 4px;font-size:13px}
+  .seg button.sel{background:var(--accent);color:#1b1205;font-weight:700}
+  .list-item{display:flex;gap:10px;align-items:center;padding:10px 4px;border-bottom:1px solid var(--line)}
+  .list-item .e{font-size:22px;width:30px;text-align:center}
+  .list-item .t{flex:1;min-width:0}
+  .list-item .t div:first-child{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .list-item .t div:last-child{font-size:12px;color:var(--muted)}
+  .muted{color:var(--muted);font-size:13px}
+  .pin{font-size:22px;line-height:30px;width:34px;height:34px;text-align:center;border-radius:50%;background:rgba(24,32,26,.9);border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.6);cursor:pointer}
+  .maplibregl-popup-content{background:var(--panel);color:var(--text);border-radius:12px;padding:12px 14px;max-width:270px;box-shadow:0 4px 18px rgba(0,0,0,.5)}
+  .maplibregl-popup-tip{border-top-color:var(--panel)!important;border-bottom-color:var(--panel)!important}
+  .maplibregl-popup-close-button{color:var(--muted);font-size:20px;padding:2px 8px}
+  .pop h4{margin:0 0 4px;font-size:15px;padding-right:18px}
+  .pop .k{color:var(--muted);font-size:12px}
+  .pop .sec{border-top:1px solid var(--line);margin-top:8px;padding-top:8px}
+  .pop .note{white-space:pre-wrap;margin:6px 0;font-size:13px}
+  .pop a{color:#8fd19e}
+  .tag{display:inline-block;font-size:11px;font-weight:700;padding:2px 7px;border-radius:6px;margin-bottom:4px}
+  .tag.pub{background:#1f5f2c;color:#c9f5d2}.tag.ours{background:#6a3a0c;color:#ffd9b0}.tag.priv{background:#5a4f12;color:#fff2a8}
+  #toast{position:absolute;left:50%;top:calc(env(safe-area-inset-top) + 56px);transform:translateX(-50%);z-index:30;background:#0d120e;border:1px solid var(--line);border-radius:10px;padding:9px 14px;font-size:14px;display:none;max-width:90vw;text-align:center}
+  .maplibregl-ctrl-top-right{top:calc(env(safe-area-inset-top) + 46px)}
+  .maplibregl-ctrl-bottom-left{bottom:calc(env(safe-area-inset-bottom) + 136px)}
+  .maplibregl-ctrl-bottom-right{bottom:calc(env(safe-area-inset-bottom) + 250px)}
+  code{background:#151c17;padding:1px 5px;border-radius:5px;font-size:12px}
+</style>
+</head>
+<body>
+<div id="map"></div>
+<div id="crosshair"></div>
+
+<div id="topbar">
+  <div class="chip" id="title">🦌 Roanoke Hunt Map</div>
+  <button class="chip" id="syncChip">Local only</button>
+  <button class="chip" id="setupBtn" aria-label="Setup">⚙️</button>
+</div>
+<div class="chip" id="hint">Zoom in to see property lines</div>
+
+<div id="actionbar"></div>
+
+<div id="toolbar">
+  <button data-tool="pin"><span class="i">📍</span>Pin</button>
+  <button data-tool="line"><span class="i">〰️</span>Line</button>
+  <button data-tool="track"><span class="i">👣</span>Track</button>
+  <button data-tool="measure"><span class="i">📏</span>Measure</button>
+  <button data-tool="marks"><span class="i">📋</span>Marks</button>
+</div>
+<button id="layersBtn" class="float"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 3 2 8l10 5 10-5-10-5z" fill="#ff8a1f" stroke="#1d231f"/><path d="m2 12.5 10 5 10-5"/><path d="m2 17 10 5 10-5"/></svg>Layers</button>
+<div id="rightBtns" class="float">
+  <button class="fbtn" id="bmBtn" aria-label="Map type">Sat</button>
+  <button class="fbtn" id="dBtn" aria-label="2D or 3D">2D</button>
+  <button class="fbtn" id="locBtn" aria-label="My location"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg></button>
+</div>
+
+<div class="sheet-wrap" id="sheetWrap"><div class="sheet" id="sheet"></div></div>
+<div id="toast"></div>
+
+<script>
+(() => {
+"use strict";
+
+/* ================= CONFIG ================= */
+const CFG = {
+  // Roanoke County public parcel service (owner names, acreage, address)
+  parcelsLayer: "https://arcgis.roanokecountyva.gov/arcgisweb/rest/services/Published_Geodata/Parcel_Details/MapServer/1",
+  // Virginia DWR Wildlife Management Area boundaries
+  wmaLayer: "https://services.dwr.virginia.gov/arcgis/rest/services/HUB_Layers/DWR_WMA_Boundaries/FeatureServer/0",
+  // Your hunting parcels are NOT stored in this file. They come from the family
+  // setup link (or Setup screen) and are kept only on each phone.
+  countyBounds: [[-80.27, 37.13], [-79.85, 37.46]],
+  // generous box around Roanoke County + neighbors for public land
+  regionBox: [-80.45, 37.05, -79.70, 37.55],
+  parcelMinZoom: 13,
+  syncEveryMs: 20000
+};
+
+const POINT_TYPES = [
+  {id:"stand", e:"🪜", label:"Stand"},
+  {id:"blind", e:"⛺", label:"Blind"},
+  {id:"camera", e:"📷", label:"Trail cam"},
+  {id:"scrape", e:"🟤", label:"Scrape"},
+  {id:"rub", e:"🌳", label:"Rub"},
+  {id:"bedding", e:"🛏️", label:"Bedding"},
+  {id:"food", e:"🌾", label:"Food/plot"},
+  {id:"water", e:"💧", label:"Water"},
+  {id:"parking", e:"🚙", label:"Parking"},
+  {id:"gate", e:"🚧", label:"Gate"},
+  {id:"harvest", e:"⭐", label:"Harvest"},
+  {id:"other", e:"📍", label:"Other"}
+];
+const LINE_TYPES = [
+  {id:"logroad", e:"🟫", label:"Logging road", color:"#c08a4a", dash:false},
+  {id:"trail", e:"🦌", label:"Deer trail", color:"#ff9d2e", dash:true},
+  {id:"access", e:"🥾", label:"Access route", color:"#3fd0ff", dash:true},
+  {id:"boundary", e:"🚩", label:"Line/flagging", color:"#ff4fd8", dash:false},
+  {id:"track", e:"👣", label:"GPS track", color:"#ffe14d", dash:true},
+  {id:"lineother", e:"〰️", label:"Other", color:"#ffffff", dash:false}
+];
+const typeInfo = id => POINT_TYPES.find(t=>t.id===id) || LINE_TYPES.find(t=>t.id===id) || POINT_TYPES[POINT_TYPES.length-1];
+
+/* ================= STORAGE ================= */
+const LS = {
+  get(k, d){ try{ const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); }catch(e){ return d; } },
+  set(k, v){ try{ localStorage.setItem(k, JSON.stringify(v)); }catch(e){} }
+};
+let marks = LS.get("hm_marks", {});
+let settings = Object.assign({name:"", url:"", key:"", parcels:[], homeBounds:null, basemap:"sat", showParcels:true, showWma:true, showOurs:true}, LS.get("hm_settings", {}));
+const ourParcels = () => settings.parcels || [];
+let dirty = new Set(LS.get("hm_dirty", []));
+let track = LS.get("hm_track", null);   // in-progress GPS track {pts:[[lng,lat]...], start}
+let lastSync = 0, syncError = "";
+const saveMarks = () => LS.set("hm_marks", marks);
+const saveSettings = () => LS.set("hm_settings", settings);
+const saveDirty = () => LS.set("hm_dirty", [...dirty]);
+
+// Family setup link: #setup=<base64 json>
+(function readSetupLink(){
+  const m = location.hash.match(/^#setup=(.+)$/);
+  if (!m) return;
+  try {
+    const cfg = JSON.parse(decodeURIComponent(escape(atob(decodeURIComponent(m[1])))));
+    let msg = [];
+    if (cfg.u && cfg.k){ settings.url = cfg.u; settings.key = cfg.k; msg.push("family sync connected"); }
+    if (Array.isArray(cfg.p) && cfg.p.length){ settings.parcels = cfg.p.map(String); settings.homeBounds = null; msg.push("your hunting land added"); }
+    saveSettings();
+    if (msg.length) setTimeout(()=>toast("Setup done: " + msg.join(" & ") + " ✔", 3500), 800);
+  } catch(e){ setTimeout(()=>toast("That setup link didn't work"), 800); }
+  history.replaceState(null, "", location.pathname + location.search);
+})();
+// A setup link opened in a tab that already had the app open only changes the hash: reload to apply it.
+window.addEventListener("hashchange", () => { if (/^#setup=/.test(location.hash)) location.reload(); });
+
+/* ================= HELPERS ================= */
+const $ = s => document.querySelector(s);
+const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const uid = () => (crypto.randomUUID ? crypto.randomUUID() : "m" + Date.now().toString(36) + Math.random().toString(36).slice(2));
+function toast(msg, ms=2600){ const t=$("#toast"); t.textContent=msg; t.style.display="block"; clearTimeout(toast._t); toast._t=setTimeout(()=>t.style.display="none", ms); }
+function haversine(a, b){ const R=6371008.8, r=Math.PI/180; const dLat=(b[1]-a[1])*r, dLon=(b[0]-a[0])*r; const x=Math.sin(dLat/2)**2+Math.cos(a[1]*r)*Math.cos(b[1]*r)*Math.sin(dLon/2)**2; return 2*R*Math.asin(Math.sqrt(x)); }
+function pathLen(c){ let d=0; for(let i=1;i<c.length;i++) d+=haversine(c[i-1],c[i]); return d; }
+function fmtDist(m){ const yd=m*1.09361; if (yd < 440) return Math.round(yd)+" yd ("+Math.round(m*3.28084)+" ft)"; return (m/1609.344).toFixed(2)+" mi"; }
+function fmtDate(ms){ try{ return new Date(ms).toLocaleDateString(undefined,{month:"short",day:"numeric",year:"numeric"}); }catch(e){ return ""; } }
+function bearing(a,b){ const r=Math.PI/180; const y=Math.sin((b[0]-a[0])*r)*Math.cos(b[1]*r); const x=Math.cos(a[1]*r)*Math.sin(b[1]*r)-Math.sin(a[1]*r)*Math.cos(b[1]*r)*Math.cos((b[0]-a[0])*r); const deg=(Math.atan2(y,x)/r+360)%360; const dirs=["N","NE","E","SE","S","SW","W","NW"]; return dirs[Math.round(deg/45)%8]; }
+async function getJSON(url){ const r = await fetch(url); if(!r.ok) throw new Error("HTTP "+r.status); const j = await r.json(); if (j && j.error) throw new Error(j.error.message || "server error"); return j; }
+function arcQuery(layerUrl, params){ return layerUrl + "/query?" + new URLSearchParams(Object.assign({f:"geojson", outSR:"4326"}, params)).toString(); }
+
+/* ================= MAP ================= */
+const BASEMAPS = {
+  sat:  {label:"Satellite", src:"sat"},
+  topo: {label:"Topo", src:"topo"},
+  hyb:  {label:"Hybrid", src:"hyb"}
+};
+const map = new maplibregl.Map({
+  container: "map",
+  bounds: settings.homeBounds || CFG.countyBounds,
+  fitBoundsOptions: {padding: 40},
+  maxPitch: 80,
+  attributionControl: {compact: true},
+  style: {
+    version: 8,
+    sources: {
+      sat:  {type:"raster", tiles:["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"], tileSize:256, maxzoom:19, attribution:"Imagery © Esri, Maxar, Earthstar Geographics"},
+      topo: {type:"raster", tiles:["https://basemap.nationalmap.gov/arcgis/rest/services/USGSTopo/MapServer/tile/{z}/{y}/{x}"], tileSize:256, maxzoom:16, attribution:"USGS The National Map"},
+      hyb:  {type:"raster", tiles:["https://basemap.nationalmap.gov/arcgis/rest/services/USGSImageryTopo/MapServer/tile/{z}/{y}/{x}"], tileSize:256, maxzoom:16, attribution:"USGS The National Map"},
+      dem:  {type:"raster-dem", tiles:["https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"], encoding:"terrarium", tileSize:256, maxzoom:15, attribution:"Elevation: AWS Terrain Tiles / USGS 3DEP"}
+    },
+    layers: [
+      {id:"bg", type:"background", paint:{"background-color":"#1c241e"}},
+      {id:"bm-sat", type:"raster", source:"sat", layout:{visibility:"visible"}},
+      {id:"bm-topo", type:"raster", source:"topo", layout:{visibility:"none"}},
+      {id:"bm-hyb", type:"raster", source:"hyb", layout:{visibility:"none"}}
+    ]
+  }
+});
+map.addControl(new maplibregl.NavigationControl({visualizePitch:true, showZoom:false}), "top-right");
+const geo = new maplibregl.GeolocateControl({positionOptions:{enableHighAccuracy:true}, trackUserLocation:true, showUserHeading:true, showAccuracyCircle:true});
+map.addControl(geo, "top-right");
+map.addControl(new maplibregl.ScaleControl({unit:"imperial"}), "bottom-left");
+let myPos = null;
+geo.on("geolocate", e => { myPos = [e.coords.longitude, e.coords.latitude]; });
+geo.on("trackuserlocationstart", () => $("#locBtn").classList.add("on"));
+geo.on("trackuserlocationend", () => $("#locBtn").classList.remove("on"));
+
+const EMPTY = {type:"FeatureCollection", features:[]};
+let is3D = false;
+
+map.on("load", () => {
+  map.addSource("wma", {type:"geojson", data:EMPTY});
+  map.addSource("parcels", {type:"geojson", data:EMPTY});
+  map.addSource("ours", {type:"geojson", data:EMPTY});
+  map.addSource("lines", {type:"geojson", data:EMPTY});
+  map.addSource("draft", {type:"geojson", data:EMPTY});
+  map.addSource("sel", {type:"geojson", data:EMPTY});
+
+  map.addLayer({id:"wma-fill", type:"fill", source:"wma", paint:{"fill-color":"#000","fill-opacity":0.01}});
+  map.addLayer({id:"wma-casing", type:"line", source:"wma", paint:{"line-color":"#00262e","line-opacity":0.6,"line-width":["interpolate",["linear"],["zoom"],10,3.5,16,6.5]}});
+  map.addLayer({id:"wma-line", type:"line", source:"wma", paint:{"line-color":"#22e4ff","line-width":["interpolate",["linear"],["zoom"],10,2,16,4],"line-dasharray":[3,1.5]}});
+
+  map.addLayer({id:"parcels-fill", type:"fill", source:"parcels", paint:{"fill-color":"#000","fill-opacity":0.01}});
+  map.addLayer({id:"parcels-line", type:"line", source:"parcels", paint:{"line-color":"#ffd400","line-opacity":0.9,"line-width":["interpolate",["linear"],["zoom"],13,0.8,17,2.2]}});
+
+  map.addLayer({id:"ours-fill", type:"fill", source:"ours", paint:{"fill-color":"#ff8a1f","fill-opacity":0.1}});
+  map.addLayer({id:"ours-line", type:"line", source:"ours", paint:{"line-color":"#ff8a1f","line-width":["interpolate",["linear"],["zoom"],11,2,17,4.5]}});
+
+  map.addLayer({id:"sel-line", type:"line", source:"sel", paint:{"line-color":"#ffffff","line-width":3.5,"line-dasharray":[2,1.5]}});
+
+  const colorExpr = ["match", ["get","type"]];
+  LINE_TYPES.forEach(t => colorExpr.push(t.id, t.color));
+  colorExpr.push("#ffffff");
+  const dashIds = LINE_TYPES.filter(t=>t.dash).map(t=>t.id);
+  map.addLayer({id:"lines-casing", type:"line", source:"lines", layout:{"line-cap":"round","line-join":"round"}, paint:{"line-color":"#000","line-opacity":0.55,"line-width":7}});
+  map.addLayer({id:"lines-solid", type:"line", source:"lines", filter:["!", ["in", ["get","type"], ["literal", dashIds]]], layout:{"line-cap":"round","line-join":"round"}, paint:{"line-color":colorExpr,"line-width":4}});
+  map.addLayer({id:"lines-dash", type:"line", source:"lines", filter:["in", ["get","type"], ["literal", dashIds]], layout:{"line-join":"round"}, paint:{"line-color":colorExpr,"line-width":4,"line-dasharray":[2,1.2]}});
+  map.addLayer({id:"lines-hit", type:"line", source:"lines", paint:{"line-color":"#000","line-opacity":0.01,"line-width":22}});
+
+  map.addLayer({id:"draft-line", type:"line", source:"draft", filter:["==",["geometry-type"],"LineString"], paint:{"line-color":"#fff","line-width":3,"line-dasharray":[1.5,1]}});
+  map.addLayer({id:"draft-pts", type:"circle", source:"draft", filter:["==",["geometry-type"],"Point"], paint:{"circle-radius":6,"circle-color":"#ff8a1f","circle-stroke-color":"#fff","circle-stroke-width":2}});
+
+  applyBasemap(); applyLayerVis();
+  loadOurs(); loadWma(); loadParcels();
+  renderMarks();
+  if (track) resumeTrack();
+  // keep the map credits folded into the small (i) button on phones
+  const attr = document.querySelector(".maplibregl-ctrl-attrib");
+  if (attr){ attr.classList.remove("maplibregl-compact-show"); attr.removeAttribute("open"); }
+});
+
+map.on("moveend", () => { clearTimeout(loadParcels._t); loadParcels._t = setTimeout(loadParcels, 350); });
+
+/* ---------- data loading ---------- */
+const parcelCache = new Map();
+let parcelReq = 0;
+async function loadParcels(){
+  if (!map.getSource("parcels")) return;
+  const hint = $("#hint");
+  if (!settings.showParcels){ hint.style.display="none"; return; }
+  if (map.getZoom() < CFG.parcelMinZoom){ hint.textContent="Zoom in to see property lines"; hint.style.display="block"; return; }
+  hint.style.display = "none";
+  const b = map.getBounds();
+  const env = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()].map(v=>v.toFixed(5)).join(",");
+  const my = ++parcelReq;
+  try {
+    const j = await getJSON(arcQuery(CFG.parcelsLayer, {
+      where:"1=1", geometry:env, geometryType:"esriGeometryEnvelope", inSR:"4326", spatialRel:"esriSpatialRelIntersects",
+      outFields:"ParcelID,Owner1_2LastFirst,Calc_Acreage,Full_Address_String,LegalDescription", returnGeometry:"true",
+      geometryPrecision:"6", resultRecordCount:"2000"
+    }));
+    if (my !== parcelReq) return;
+    if (parcelCache.size > 8000) parcelCache.clear();
+    (j.features||[]).forEach(f => { const id=f.properties && f.properties.ParcelID; if(id) parcelCache.set(id, f); });
+    map.getSource("parcels").setData({type:"FeatureCollection", features:[...parcelCache.values()]});
+    if (j.exceededTransferLimit || (j.properties && j.properties.exceededTransferLimit)){ hint.textContent="Zoom in more to load every parcel"; hint.style.display="block"; }
+  } catch(e){
+    if (my === parcelReq){ hint.textContent="Couldn't reach county parcel server"; hint.style.display="block"; }
+    console.warn("parcels", e);
+  }
+}
+function boundsOf(fc){
+  let b = null;
+  const walk = c => { if (typeof c[0] === "number"){ b ? b.extend(c) : (b = new maplibregl.LngLatBounds(c, c)); } else c.forEach(walk); };
+  (fc.features||[]).forEach(f => f.geometry && walk(f.geometry.coordinates));
+  return b;
+}
+async function loadOurs(flyHome){
+  const src = map.getSource("ours"); if (!src) return;
+  const ids = ourParcels().filter(p => /^[\w.\-]+$/.test(p));
+  if (!ids.length){ src.setData(EMPTY); return; }
+  try {
+    const where = "ParcelID IN (" + ids.map(p=>"'"+p+"'").join(",") + ")";
+    const j = await getJSON(arcQuery(CFG.parcelsLayer, {where, outFields:"ParcelID,Owner1_2LastFirst,Calc_Acreage,Full_Address_String,LegalDescription", returnGeometry:"true", geometryPrecision:"6"}));
+    src.setData(j);
+    const b = boundsOf(j);
+    if (b){
+      const nb = b.toArray();
+      const first = !settings.homeBounds;
+      settings.homeBounds = nb; saveSettings();
+      if (first || flyHome) map.fitBounds(nb, {padding:40});
+    }
+  } catch(e){ console.warn("ours", e); toast("Couldn't load your property outlines (county server)"); }
+}
+function goHome(){
+  if (settings.homeBounds) map.fitBounds(settings.homeBounds, {padding:40});
+  else if (ourParcels().length) loadOurs(true);
+  else { map.fitBounds(CFG.countyBounds, {padding:20}); toast("Add your parcels in Setup to set a home view"); }
+}
+async function loadWma(){
+  try {
+    const j = await getJSON(arcQuery(CFG.wmaLayer, {
+      where:"1=1", geometry:CFG.regionBox.join(","), geometryType:"esriGeometryEnvelope", inSR:"4326", spatialRel:"esriSpatialRelIntersects",
+      outFields:"WMA_NAME,ACRES,URL,Property_Type", returnGeometry:"true", geometryPrecision:"6"
+    }));
+    map.getSource("wma").setData(j);
+  } catch(e){ console.warn("wma", e); toast("Couldn't load WMA boundaries (DWR server)"); }
+}
+
+/* ---------- layers / basemap ---------- */
+function applyBasemap(){
+  Object.keys(BASEMAPS).forEach(k => { if (map.getLayer("bm-"+k)) map.setLayoutProperty("bm-"+k, "visibility", settings.basemap===k ? "visible" : "none"); });
+  const short = {sat:"Sat", topo:"Topo", hyb:"Hyb"};
+  $("#bmBtn").textContent = short[settings.basemap] || "Sat";
+}
+function applyLayerVis(){
+  const vis = (ids, on) => ids.forEach(id => map.getLayer(id) && map.setLayoutProperty(id, "visibility", on ? "visible" : "none"));
+  vis(["parcels-fill","parcels-line","sel-line"], settings.showParcels);
+  vis(["wma-fill","wma-casing","wma-line"], settings.showWma);
+  vis(["ours-fill","ours-line"], settings.showOurs);
+  loadParcels();
+}
+function set3D(on){
+  is3D = on;
+  if (on){ map.setTerrain({source:"dem", exaggeration:1.4}); map.easeTo({pitch:62, duration:800}); }
+  else { map.setTerrain(null); map.easeTo({pitch:0, bearing:0, duration:600}); }
+  const b = $("#dBtn"); b.textContent = on ? "3D" : "2D"; b.classList.toggle("on", on);
+}
+
+/* ================= MARKS ================= */
+let domMarkers = [];
+function liveMarks(){ return Object.values(marks).filter(m => !m.deleted); }
+function renderMarks(){
+  domMarkers.forEach(m => m.remove()); domMarkers = [];
+  const lines = [];
+  liveMarks().forEach(m => {
+    if (m.kind === "point"){
+      const el = document.createElement("div");
+      el.className = "pin"; el.textContent = typeInfo(m.type).e; el.title = m.name || typeInfo(m.type).label;
+      el.addEventListener("click", ev => { ev.stopPropagation(); if (mode) return; showMarkPopup(m.id, m.coords); });
+      domMarkers.push(new maplibregl.Marker({element:el}).setLngLat(m.coords).addTo(map));
+    } else if (m.kind === "line" && m.coords && m.coords.length > 1){
+      lines.push({type:"Feature", properties:{id:m.id, type:m.type}, geometry:{type:"LineString", coordinates:m.coords}});
+    }
+  });
+  if (map.getSource("lines")) map.getSource("lines").setData({type:"FeatureCollection", features:lines});
+}
+function upsertMark(m){
+  m.updated = Date.now();
+  if (!m.by) m.by = settings.name || "";
+  marks[m.id] = m; dirty.add(m.id);
+  saveMarks(); saveDirty(); renderMarks(); syncSoon();
+}
+function deleteMark(id){
+  const m = marks[id]; if (!m) return;
+  marks[id] = {id, kind:m.kind, deleted:true, updated:Date.now()};
+  dirty.add(id); saveMarks(); saveDirty(); renderMarks(); syncSoon();
+}
+
+let popup = null;
+function openPopup(lngLat, html){
+  if (popup) popup.remove();
+  popup = new maplibregl.Popup({maxWidth:"290px", closeOnClick:true, focusAfterOpen:false}).setLngLat(lngLat).setHTML(html).addTo(map);
+}
+function showMarkPopup(id, lngLat){
+  const m = marks[id]; if (!m) return;
+  const t = typeInfo(m.type);
+  let extra = "";
+  if (m.kind === "line") extra = `<div class="k">Length: ${fmtDist(pathLen(m.coords))}</div>`;
+  if (m.kind === "point" && myPos){ const d = haversine(myPos, m.coords); extra = `<div class="k">From you: ${fmtDist(d)} ${bearing(myPos, m.coords)}</div>`; }
+  const coordTxt = m.kind==="point" ? `<div class="k">${m.coords[1].toFixed(5)}, ${m.coords[0].toFixed(5)}</div>` : "";
+  openPopup(lngLat, `<div class="pop"><h4>${t.e} ${esc(m.name || t.label)}</h4>
+    <div class="k">${esc(t.label)}${m.by ? " · added by "+esc(m.by) : ""}${m.created ? " · "+fmtDate(m.created) : ""}</div>
+    ${m.notes ? `<div class="note">${esc(m.notes)}</div>` : ""}${extra}${coordTxt}
+    <div class="row" style="margin-top:10px"><button class="btn small" data-act="edit" data-id="${esc(id)}">Edit</button><button class="btn small danger" data-act="del" data-id="${esc(id)}">Delete</button></div></div>`);
+}
+
+/* ---------- map clicks ---------- */
+map.on("click", e => {
+  const ll = [e.lngLat.lng, e.lngLat.lat];
+  if (mode === "line" || mode === "measure"){ draft.push(ll); updateDraft(); return; }
+  if (mode === "pin" || mode === "track") return;
+  const lineHit = map.queryRenderedFeatures(e.point, {layers:["lines-hit"]})[0];
+  if (lineHit){ showMarkPopup(lineHit.properties.id, e.lngLat); return; }
+  const layers = ["wma-fill","ours-fill","parcels-fill"].filter(l => map.getLayer(l) && map.getLayoutProperty(l,"visibility") !== "none");
+  const hits = map.queryRenderedFeatures(e.point, {layers});
+  const wma = hits.find(h => h.layer.id === "wma-fill");
+  const parcel = hits.find(h => h.layer.id === "ours-fill") || hits.find(h => h.layer.id === "parcels-fill");
+  if (!wma && !parcel){ if (map.getSource("sel")) map.getSource("sel").setData(EMPTY); return; }
+  let html = '<div class="pop">';
+  if (parcel){
+    const p = parcel.properties;
+    const ours = ourParcels().includes(p.ParcelID);
+    const full = parcelCache.get(p.ParcelID) || parcel.toJSON();
+    map.getSource("sel").setData({type:"FeatureCollection", features:[full]});
+    html += `<span class="tag ${ours ? "ours" : "priv"}">${ours ? "YOUR HUNTING LAND" : "PRIVATE"}</span>
+      <h4>${esc(p.Owner1_2LastFirst || "Owner not listed")}</h4>
+      <div class="k">${p.Calc_Acreage ? Number(p.Calc_Acreage).toFixed(1)+" ac · " : ""}Parcel ${esc(p.ParcelID)}</div>
+      ${p.Full_Address_String ? `<div class="k">${esc(p.Full_Address_String)}</div>` : ""}
+      ${p.LegalDescription ? `<div class="k">${esc(p.LegalDescription)}</div>` : ""}`;
+  }
+  if (wma){
+    const w = wma.properties;
+    const url = String(w.URL || "").replace("www.dgif.virginia.gov", "dwr.virginia.gov");
+    html += `<div class="${parcel ? "sec" : ""}"><span class="tag pub">PUBLIC HUNTING LAND</span>
+      <h4>${esc(w.WMA_NAME)} WMA</h4>
+      <div class="k">${w.ACRES ? Math.round(w.ACRES).toLocaleString()+" acres · " : ""}Virginia DWR</div>
+      ${url ? `<div style="margin-top:6px"><a href="${esc(url)}" target="_blank" rel="noopener">WMA rules &amp; seasons ↗</a></div>` : ""}</div>`;
+  }
+  html += `<div class="k" style="margin-top:8px">Tax-map lines, not a survey.</div></div>`;
+  openPopup(e.lngLat, html);
+});
+
+/* ================= MODES ================= */
+let mode = null;          // null | pin | line | measure | track
+let draft = [];
+function setMode(m){
+  mode = m; draft = (m === "track" && track) ? track.pts : []; updateDraft();
+  document.body.classList.toggle("moding", !!m);
+  document.querySelectorAll("#toolbar button").forEach(b => { b.classList.toggle("on", b.dataset.tool === m); b.classList.toggle("rec", b.dataset.tool === "track" && !!track); });
+  $("#crosshair").style.display = m === "pin" ? "block" : "none";
+  map.getCanvas().style.cursor = (m === "line" || m === "measure") ? "crosshair" : "";
+  if (popup) popup.remove();
+  renderActionBar();
+}
+function updateDraft(){
+  if (!map.getSource("draft")) return;
+  const feats = draft.map(c => ({type:"Feature", properties:{}, geometry:{type:"Point", coordinates:c}}));
+  if (draft.length > 1) feats.push({type:"Feature", properties:{}, geometry:{type:"LineString", coordinates:draft}});
+  map.getSource("draft").setData({type:"FeatureCollection", features:feats});
+  renderActionBar();
+}
+function renderActionBar(){
+  const bar = $("#actionbar");
+  if (!mode){ bar.style.display = "none"; return; }
+  bar.style.display = "flex";
+  const len = draft.length > 1 ? fmtDist(pathLen(draft)) : "—";
+  if (mode === "pin"){
+    bar.innerHTML = `<div class="msg">Move the map so the <b>crosshair</b> is on the spot, or use your GPS.</div>
+      <button class="btn primary" data-act="pin-here">Pin crosshair</button><button class="btn" data-act="pin-gps">📡 My GPS</button><button class="btn" data-act="cancel">Cancel</button>`;
+  } else if (mode === "line"){
+    bar.innerHTML = `<div class="msg">Tap the map to trace the line · <b>${draft.length}</b> pts · <b>${len}</b></div>
+      <button class="btn" data-act="undo">Undo</button><button class="btn primary" data-act="line-done" ${draft.length<2?"disabled":""}>Finish</button><button class="btn" data-act="cancel">Cancel</button>`;
+  } else if (mode === "track"){
+    const mins = track ? Math.round((Date.now() - track.start)/60000) : 0;
+    const dur = mins >= 60 ? Math.floor(mins/60) + " h " + (mins%60) + " min" : mins + " min";
+    bar.innerHTML = `<div class="msg">🔴 <b>Recording</b> · <b>${len}</b> · ${dur} · ${draft.length} pts<br>Keep the screen on and this app open while walking.</div>
+      <button class="btn primary" data-act="track-stop">Stop &amp; save</button><button class="btn danger" data-act="track-discard">Discard</button><button class="btn" data-act="track-center">Center</button>`;
+  } else if (mode === "measure"){
+    bar.innerHTML = `<div class="msg">Tap points to measure · <b>${len}</b>${myPos && draft.length===1 ? " · from you: <b>"+fmtDist(haversine(myPos, draft[0]))+"</b>" : ""}</div>
+      <button class="btn" data-act="undo">Undo</button><button class="btn" data-act="clear">Clear</button><button class="btn primary" data-act="cancel">Done</button>`;
+  }
+}
+
+/* ================= GO & TRACK ================= */
+let watchId = null, wakeLock = null, trackTimer = null;
+async function keepAwake(){ try { if ("wakeLock" in navigator && !wakeLock) { wakeLock = await navigator.wakeLock.request("screen"); wakeLock.addEventListener("release", () => { wakeLock = null; }); } } catch(e){} }
+function releaseAwake(){ try { if (wakeLock) wakeLock.release(); } catch(e){} wakeLock = null; }
+function onTrackPos(p){
+  if (!track) return;
+  const c = [p.coords.longitude, p.coords.latitude];
+  myPos = c;
+  if (p.coords.accuracy && p.coords.accuracy > 40) return;          // skip poor fixes
+  const last = track.pts[track.pts.length - 1];
+  if (last && haversine(last, c) < 4) return;                        // ignore jitter under ~13 ft
+  track.pts.push(c); LS.set("hm_track", track);
+  if (mode === "track") updateDraft();
+}
+function watchTrack(){
+  if (!navigator.geolocation){ toast("GPS not available"); return false; }
+  if (watchId == null) watchId = navigator.geolocation.watchPosition(onTrackPos, err => toast("GPS: " + err.message, 3500), {enableHighAccuracy:true, maximumAge:0, timeout:30000});
+  keepAwake();
+  clearInterval(trackTimer); trackTimer = setInterval(() => { if (mode === "track") renderActionBar(); }, 30000);
+  return true;
+}
+function startTrack(){
+  if (track){ setMode("track"); return; }
+  track = {pts:[], start:Date.now()}; LS.set("hm_track", track);
+  if (!watchTrack()){ track = null; LS.set("hm_track", null); return; }
+  setMode("track"); toast("Recording your path");
+  try { geo.trigger(); } catch(e){}
+}
+function resumeTrack(){ watchTrack(); setMode("track"); toast("Still recording your track"); }
+function endTrack(){
+  if (watchId != null) navigator.geolocation.clearWatch(watchId);
+  watchId = null; clearInterval(trackTimer); releaseAwake();
+  const t = track; track = null; LS.set("hm_track", null);
+  setMode(null);
+  return t;
+}
+document.addEventListener("visibilitychange", () => { if (track && document.visibilityState === "visible") keepAwake(); });
+
+/* ================= SHEETS ================= */
+function openSheet(html){ $("#sheet").innerHTML = html; $("#sheetWrap").style.display = "flex"; }
+function closeSheet(){ $("#sheetWrap").style.display = "none"; $("#sheet").innerHTML = ""; }
+$("#sheetWrap").addEventListener("click", e => { if (e.target.id === "sheetWrap") closeSheet(); });
+
+let editing = null;
+function openMarkForm(m){
+  editing = m;
+  const types = m.kind === "point" ? POINT_TYPES : LINE_TYPES;
+  const isNew = !marks[m.id];
+  openSheet(`<h2>${isNew ? "New " + (m.kind==="point" ? "pin" : "line") : "Edit"}</h2>
+    <div class="typegrid" id="typegrid">${types.map(t => `<button data-type="${t.id}" class="${t.id===m.type?"sel":""}"><span class="e">${t.e}</span>${t.label}</button>`).join("")}</div>
+    <label>Name</label><input type="text" id="fName" maxlength="80" placeholder="e.g. Ridge ladder stand" value="${esc(m.name||"")}">
+    <label>Notes</label><textarea id="fNotes" placeholder="Wind, card checks, sightings…">${esc(m.notes||"")}</textarea>
+    ${m.kind==="line" ? `<div class="muted" style="margin-top:8px">Length: ${fmtDist(pathLen(m.coords))}</div>` : `<div class="muted" style="margin-top:8px">${m.coords[1].toFixed(5)}, ${m.coords[0].toFixed(5)}</div>`}
+    <div class="row"><button class="btn" data-act="sheet-cancel">Cancel</button><button class="btn primary" data-act="mark-save">Save</button></div>
+    ${!isNew ? `<div class="row"><button class="btn danger" data-act="del" data-id="${esc(m.id)}">Delete</button></div>` : ""}`);
+  $("#typegrid").addEventListener("click", e => {
+    const b = e.target.closest("button[data-type]"); if (!b) return;
+    editing.type = b.dataset.type;
+    document.querySelectorAll("#typegrid button").forEach(x => x.classList.toggle("sel", x === b));
+  });
+}
+function saveMarkForm(){
+  if (!editing) return;
+  editing.name = $("#fName").value.trim();
+  editing.notes = $("#fNotes").value.trim();
+  if (!editing.created) editing.created = Date.now();
+  upsertMark(editing); editing = null; closeSheet(); toast("Saved");
+}
+
+function openMarksList(filter){
+  const all = liveMarks().sort((a,b) => (b.updated||0) - (a.updated||0));
+  const items = all.filter(m => !filter || m.type === filter);
+  const usedTypes = [...new Set(all.map(m=>m.type))];
+  openSheet(`<h2>Marks (${all.length})</h2>
+    <select id="mFilter"><option value="">All types</option>${usedTypes.map(t=>`<option value="${t}" ${t===filter?"selected":""}>${typeInfo(t).e} ${typeInfo(t).label}</option>`).join("")}</select>
+    <div style="margin-top:8px">${items.length ? items.map(m => {
+      const t = typeInfo(m.type);
+      const sub = [t.label, m.kind==="line" ? fmtDist(pathLen(m.coords)) : (myPos ? fmtDist(haversine(myPos, m.coords))+" away" : ""), m.by].filter(Boolean).join(" · ");
+      return `<div class="list-item" data-act="goto" data-id="${esc(m.id)}"><div class="e">${t.e}</div><div class="t"><div>${esc(m.name || t.label)}</div><div>${esc(sub)}</div></div><div>›</div></div>`;
+    }).join("") : `<p class="muted">No marks yet. Use 📍 Pin or 〰️ Line to add stands, cameras, trails and roads.</p>`}</div>
+    <h3>Backup &amp; trade files</h3>
+    <div class="row"><button class="btn" data-act="exp-gpx">Export GPX</button><button class="btn" data-act="exp-json">Export GeoJSON</button></div>
+    <div class="row"><button class="btn" data-act="import">Import GPX / GeoJSON</button></div>
+    <input type="file" id="importFile" accept=".gpx,.geojson,.json,application/gpx+xml,application/json" style="display:none">
+    <div class="row"><button class="btn" data-act="sheet-cancel">Close</button></div>`);
+  $("#mFilter").addEventListener("change", e => openMarksList(e.target.value));
+  $("#importFile").addEventListener("change", e => { const f = e.target.files[0]; if (f) importFile(f); });
+}
+function gotoMark(id){
+  const m = marks[id]; if (!m) return; closeSheet();
+  if (m.kind === "point"){ map.flyTo({center:m.coords, zoom:Math.max(map.getZoom(), 17)}); setTimeout(()=>showMarkPopup(id, m.coords), 900); }
+  else { const b = new maplibregl.LngLatBounds(m.coords[0], m.coords[0]); m.coords.forEach(c=>b.extend(c)); map.fitBounds(b, {padding:80, maxZoom:17}); setTimeout(()=>showMarkPopup(id, m.coords[Math.floor(m.coords.length/2)]), 900); }
+}
+
+function openLayers(){
+  openSheet(`<h2>Map layers</h2>
+    <label>Basemap</label>
+    <div class="seg" id="bmSeg">${Object.entries(BASEMAPS).map(([k,v]) => `<button data-bm="${k}" class="${settings.basemap===k?"sel":""}">${v.label}</button>`).join("")}</div>
+    <div class="toggle" style="margin-top:10px"><span>⛰️ 3D terrain</span><input type="checkbox" id="t3d" ${is3D?"checked":""}></div>
+    <div class="toggle"><span>🟨 Property lines &amp; owners</span><input type="checkbox" id="tPar" ${settings.showParcels?"checked":""}></div>
+    <div class="toggle"><span>🟦 Public hunting land (WMA, cyan outline)</span><input type="checkbox" id="tWma" ${settings.showWma?"checked":""}></div>
+    <div class="toggle"><span>🟧 Your hunting land outline</span><input type="checkbox" id="tOurs" ${settings.showOurs?"checked":""}></div>
+    <p class="muted">In 3D, drag with two fingers to tilt and twist to rotate.</p>
+    <div class="row"><button class="btn" data-act="home">Zoom to our land</button><button class="btn" data-act="sheet-cancel">Close</button></div>`);
+  $("#bmSeg").addEventListener("click", e => { const b = e.target.closest("button[data-bm]"); if(!b) return; settings.basemap = b.dataset.bm; saveSettings(); applyBasemap(); document.querySelectorAll("#bmSeg button").forEach(x=>x.classList.toggle("sel", x===b)); });
+  $("#t3d").addEventListener("change", e => set3D(e.target.checked));
+  $("#tPar").addEventListener("change", e => { settings.showParcels = e.target.checked; saveSettings(); applyLayerVis(); });
+  $("#tWma").addEventListener("change", e => { settings.showWma = e.target.checked; saveSettings(); applyLayerVis(); });
+  $("#tOurs").addEventListener("change", e => { settings.showOurs = e.target.checked; saveSettings(); applyLayerVis(); });
+}
+
+function openSettings(){
+  const on = syncOn();
+  openSheet(`<h2>Setup</h2>
+    <label>Your name (shows on marks you add)</label><input type="text" id="sName" maxlength="40" value="${esc(settings.name)}" placeholder="e.g. Nathan">
+    <h3>Our hunting land</h3>
+    <label>Parcel IDs, one per line (saved on this phone only)</label>
+    <textarea id="sParcels" style="min-height:70px" autocapitalize="off" autocorrect="off" placeholder="000.00-00-00.00-0000">${esc(ourParcels().join("\n"))}</textarea>
+    <h3>Family sharing</h3>
+    <p class="muted">${on ? (syncError ? "⚠️ Sync problem: "+esc(syncError) : "✅ Connected. Marks sync with everyone using this link.") : "Off — marks are saved on this phone only. Connect a free Supabase database to share marks with family."}</p>
+    <label>Supabase project URL</label><input type="text" id="sUrl" value="${esc(settings.url)}" placeholder="https://xxxx.supabase.co" autocapitalize="off" autocorrect="off">
+    <label>Supabase publishable (anon) key</label><input type="password" id="sKey" value="${esc(settings.key)}" placeholder="sb_publishable_… or eyJ…" autocapitalize="off" autocorrect="off">
+    <div class="row"><button class="btn primary" data-act="set-save">Save</button><button class="btn" data-act="sync-now" ${on?"":"disabled"}>Sync now</button></div>
+    ${(on || ourParcels().length) ? `<div class="row"><button class="btn" data-act="copy-link">Copy family setup link</button></div><p class="muted">The link carries your parcel IDs${on ? " and sync key" : ""}. Text it to family; opening it sets up their phone. Share it only with family.</p>` : ""}
+    <h3>About</h3>
+    <p class="muted">Property lines and owners: Roanoke County GIS. Public land: Virginia DWR. These are tax-map lines, not surveys; they can be off by tens of feet. Know the real boundary and check DWR rules before hunting.</p>
+    <div class="row"><button class="btn" data-act="sheet-cancel">Close</button></div>`);
+}
+
+/* ================= IMPORT / EXPORT ================= */
+function download(name, text, mime){
+  const blob = new Blob([text], {type:mime});
+  const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = name;
+  document.body.appendChild(a); a.click(); setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+}
+function exportGeoJSON(){
+  const fc = {type:"FeatureCollection", features: liveMarks().map(m => ({type:"Feature",
+    properties:{id:m.id, kind:m.kind, type:m.type, name:m.name||"", notes:m.notes||"", by:m.by||"", created:m.created||null, updated:m.updated||null},
+    geometry: m.kind==="point" ? {type:"Point", coordinates:m.coords} : {type:"LineString", coordinates:m.coords}}))};
+  download("hunt-marks-"+new Date().toISOString().slice(0,10)+".geojson", JSON.stringify(fc, null, 1), "application/geo+json");
+}
+function exportGPX(){
+  const x = s => esc(s);
+  const pts = liveMarks().filter(m=>m.kind==="point").map(m => `<wpt lat="${m.coords[1]}" lon="${m.coords[0]}"><name>${x(m.name || typeInfo(m.type).label)}</name><desc>${x(m.notes||"")}</desc><type>${x(typeInfo(m.type).label)}</type></wpt>`).join("\n");
+  const trks = liveMarks().filter(m=>m.kind==="line").map(m => `<trk><name>${x(m.name || typeInfo(m.type).label)}</name><desc>${x(m.notes||"")}</desc><type>${x(typeInfo(m.type).label)}</type><trkseg>${m.coords.map(c=>`<trkpt lat="${c[1]}" lon="${c[0]}"/>`).join("")}</trkseg></trk>`).join("\n");
+  download("hunt-marks-"+new Date().toISOString().slice(0,10)+".gpx", `<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="Roanoke Hunt Map" xmlns="http://www.topografix.com/GPX/1/1">\n${pts}\n${trks}\n</gpx>`, "application/gpx+xml");
+}
+function guessType(label, kind){
+  const s = String(label||"").toLowerCase();
+  const list = kind === "point" ? POINT_TYPES : LINE_TYPES;
+  const hit = list.find(t => s.includes(t.id) || s.includes(t.label.toLowerCase()));
+  return hit ? hit.id : (kind === "point" ? "other" : "lineother");
+}
+async function importFile(file){
+  const text = await file.text(); let n = 0;
+  const add = m => { if (!m.coords) return; if (!m.id || marks[m.id]) m.id = uid(); m.created = m.created || Date.now(); upsertMark(m); n++; };
+  try {
+    if (/\.gpx$/i.test(file.name) || text.trim().startsWith("<")){
+      const doc = new DOMParser().parseFromString(text, "application/xml");
+      const g = (el, tag) => { const t = el.getElementsByTagName(tag)[0]; return t ? t.textContent : ""; };
+      [...doc.getElementsByTagName("wpt")].forEach(w => add({kind:"point", type:guessType(g(w,"type")+" "+g(w,"sym")+" "+g(w,"name"),"point"), name:g(w,"name"), notes:g(w,"desc"), coords:[+w.getAttribute("lon"), +w.getAttribute("lat")]}));
+      [...doc.getElementsByTagName("trk"), ...doc.getElementsByTagName("rte")].forEach(t => {
+        const pts = [...t.getElementsByTagName("trkpt"), ...t.getElementsByTagName("rtept")].map(p => [+p.getAttribute("lon"), +p.getAttribute("lat")]);
+        if (pts.length > 1) add({kind:"line", type:guessType(g(t,"type")+" "+g(t,"name"),"line"), name:g(t,"name"), notes:g(t,"desc"), coords:pts});
+      });
+    } else {
+      const j = JSON.parse(text);
+      (j.features || []).forEach(f => {
+        const p = f.properties || {}, geom = f.geometry || {};
+        if (geom.type === "Point") add({id:p.id, kind:"point", type:POINT_TYPES.some(t=>t.id===p.type) ? p.type : guessType(p.type||p.name,"point"), name:p.name||"", notes:p.notes||p.description||"", by:p.by||"", created:p.created, coords:geom.coordinates.slice(0,2)});
+        else if (geom.type === "LineString") add({id:p.id, kind:"line", type:LINE_TYPES.some(t=>t.id===p.type) ? p.type : guessType(p.type||p.name,"line"), name:p.name||"", notes:p.notes||p.description||"", by:p.by||"", created:p.created, coords:geom.coordinates.map(c=>c.slice(0,2))});
+      });
+    }
+    closeSheet(); toast("Imported " + n + " mark" + (n===1?"":"s"));
+  } catch(e){ toast("Couldn't read that file"); console.warn(e); }
+}
+
+/* ================= SYNC (Supabase REST) ================= */
+function syncOn(){ return !!(settings.url && settings.key); }
+async function sb(path, opts){
+  opts = opts || {};
+  const headers = Object.assign({apikey: settings.key, "Content-Type":"application/json"}, opts.headers || {});
+  if (!settings.key.startsWith("sb_")) headers.Authorization = "Bearer " + settings.key;
+  const r = await fetch(settings.url.replace(/\/+$/,"") + "/rest/v1/" + path, Object.assign({}, opts, {headers}));
+  if (!r.ok){ let t = ""; try{ t = (await r.json()).message || ""; }catch(e){} throw new Error("HTTP " + r.status + (t ? " – " + t : "")); }
+  if (r.status === 204) return null;
+  const txt = await r.text(); return txt ? JSON.parse(txt) : null;
+}
+let syncing = false;
+async function syncNow(manual){
+  if (!syncOn() || syncing) return;
+  syncing = true; updateSyncChip("Syncing…");
+  try {
+    if (dirty.size){
+      const ids = [...dirty];
+      const rows = ids.map(id => marks[id]).filter(Boolean).map(m => ({id:m.id, data:m, updated:m.updated||Date.now(), deleted:!!m.deleted}));
+      if (rows.length) await sb("marks?on_conflict=id", {method:"POST", headers:{Prefer:"resolution=merge-duplicates,return=minimal"}, body:JSON.stringify(rows)});
+      ids.forEach(id => dirty.delete(id)); saveDirty();
+    }
+    const remote = await sb("marks?select=id,data,updated&limit=5000");
+    let changed = false;
+    (remote || []).forEach(r => {
+      const loc = marks[r.id];
+      if (dirty.has(r.id)) return;
+      if (!loc || (r.updated || 0) > (loc.updated || 0)){ marks[r.id] = r.data; changed = true; }
+    });
+    if (changed){ saveMarks(); renderMarks(); }
+    lastSync = Date.now(); syncError = "";
+    if (manual) toast("Synced ✔");
+  } catch(e){
+    syncError = e.message || "network error"; console.warn("sync", e);
+    if (manual) toast("Sync failed: " + syncError, 4000);
+  } finally { syncing = false; updateSyncChip(); }
+}
+function syncSoon(){ clearTimeout(syncSoon._t); syncSoon._t = setTimeout(() => syncNow(false), 800); }
+function updateSyncChip(txt){
+  const c = $("#syncChip");
+  if (txt){ c.textContent = txt; return; }
+  if (!syncOn()){ c.textContent = "📱 Local only"; return; }
+  if (syncError){ c.textContent = "⚠️ Sync issue"; return; }
+  if (!lastSync){ c.textContent = "🔄 Family sync"; return; }
+  const mins = Math.round((Date.now() - lastSync)/60000);
+  c.textContent = "✅ Synced" + (mins >= 1 ? " " + mins + "m ago" : "") + (dirty.size ? " · " + dirty.size + " waiting" : "");
+}
+setInterval(() => { if (document.visibilityState === "visible") syncNow(false); else updateSyncChip(); }, CFG.syncEveryMs);
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") syncNow(false); });
+updateSyncChip(); syncNow(false);
+
+/* ================= EVENT WIRING ================= */
+$("#toolbar").addEventListener("click", e => {
+  const b = e.target.closest("button[data-tool]"); if (!b) return;
+  const t = b.dataset.tool;
+  if (track && t !== "track"){ toast("Stop or save your track first"); setMode("track"); return; }
+  if (t === "track"){ if (track) setMode("track"); else startTrack(); return; }
+  if (t === "pin" || t === "line" || t === "measure"){ setMode(mode === t ? null : t); return; }
+  setMode(null);
+  if (t === "marks") openMarksList();
+});
+const guardTrack = fn => () => { if (track){ toast("Stop or save your track first"); setMode("track"); return; } setMode(null); fn(); };
+$("#syncChip").addEventListener("click", guardTrack(openSettings));
+$("#setupBtn").addEventListener("click", guardTrack(openSettings));
+$("#layersBtn").addEventListener("click", guardTrack(openLayers));
+$("#bmBtn").addEventListener("click", () => { const order = ["sat","topo","hyb"]; settings.basemap = order[(order.indexOf(settings.basemap)+1) % order.length]; saveSettings(); applyBasemap(); toast(BASEMAPS[settings.basemap].label); });
+$("#dBtn").addEventListener("click", () => set3D(!is3D));
+$("#locBtn").addEventListener("click", () => { try { geo.trigger(); } catch(e){ toast("Location not available"); } });
+
+document.addEventListener("click", async e => {
+  const el = e.target.closest("[data-act]"); if (!el) return;
+  const act = el.dataset.act, id = el.dataset.id;
+  switch (act){
+    case "cancel": setMode(null); break;
+    case "undo": draft.pop(); updateDraft(); break;
+    case "clear": draft = []; updateDraft(); break;
+    case "pin-here": { const c = map.getCenter(); const m = {id:uid(), kind:"point", type:"stand", coords:[c.lng, c.lat]}; setMode(null); openMarkForm(m); break; }
+    case "pin-gps": {
+      if (!navigator.geolocation){ toast("GPS not available"); break; }
+      toast("Getting GPS fix…");
+      navigator.geolocation.getCurrentPosition(p => {
+        myPos = [p.coords.longitude, p.coords.latitude];
+        setMode(null); map.easeTo({center:myPos});
+        openMarkForm({id:uid(), kind:"point", type:"stand", coords:myPos, notes:p.coords.accuracy ? "GPS ±" + Math.round(p.coords.accuracy*3.28084) + " ft" : ""});
+      }, err => toast("GPS failed: " + err.message, 3500), {enableHighAccuracy:true, timeout:20000, maximumAge:5000});
+      break;
+    }
+    case "line-done": { if (draft.length < 2) break; const m = {id:uid(), kind:"line", type:"trail", coords:draft.slice()}; setMode(null); openMarkForm(m); break; }
+    case "track-stop": {
+      const t = endTrack();
+      if (!t || t.pts.length < 2){ toast("Track too short to save"); break; }
+      const mins = Math.round((Date.now() - t.start)/60000);
+      openMarkForm({id:uid(), kind:"line", type:"track", coords:t.pts.slice(), name:"Track " + fmtDate(t.start), notes:mins + " min walk"});
+      break;
+    }
+    case "track-discard":
+      if (el.dataset.confirm !== "1"){ el.dataset.confirm = "1"; el.textContent = "Tap again to discard"; break; }
+      endTrack(); toast("Track discarded"); break;
+    case "track-center": if (myPos) map.easeTo({center:myPos, zoom:Math.max(map.getZoom(), 16)}); else toast("Waiting for GPS…"); break;
+    case "mark-save": saveMarkForm(); break;
+    case "sheet-cancel": editing = null; closeSheet(); break;
+    case "edit": if (popup) popup.remove(); openMarkForm(JSON.parse(JSON.stringify(marks[id]))); break;
+    case "del":
+      if (el.dataset.confirm !== "1"){ el.dataset.confirm = "1"; el.textContent = "Tap again to delete"; break; }
+      if (popup) popup.remove(); closeSheet(); deleteMark(id); toast("Deleted"); break;
+    case "goto": gotoMark(id); break;
+    case "exp-gpx": exportGPX(); break;
+    case "exp-json": exportGeoJSON(); break;
+    case "import": $("#importFile").click(); break;
+    case "home": closeSheet(); goHome(); break;
+    case "set-save": {
+      settings.name = $("#sName").value.trim();
+      const newParcels = $("#sParcels").value.split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
+      if (newParcels.join("|") !== ourParcels().join("|")){ settings.parcels = newParcels; settings.homeBounds = null; saveSettings(); loadOurs(true); }
+      settings.url = $("#sUrl").value.trim();
+      settings.key = $("#sKey").value.trim();
+      saveSettings();
+      if (syncOn()){ Object.keys(marks).forEach(k => dirty.add(k)); saveDirty(); }
+      closeSheet(); updateSyncChip(); toast("Saved"); syncNow(true);
+      break;
+    }
+    case "sync-now": closeSheet(); syncNow(true); break;
+    case "copy-link": {
+      const cfg = {p: ourParcels()};
+      if (syncOn()){ cfg.u = settings.url; cfg.k = settings.key; }
+      const payload = encodeURIComponent(btoa(unescape(encodeURIComponent(JSON.stringify(cfg)))));
+      const link = location.origin + location.pathname + "#setup=" + payload;
+      try { await navigator.clipboard.writeText(link); toast("Setup link copied — text it to family"); }
+      catch(err){ $("#sheet").insertAdjacentHTML("beforeend", `<label>Copy this link:</label><textarea readonly>${esc(link)}</textarea>`); }
+      break;
+    }
+  }
+});
+})();
+</script>
+</body>
+</html>
