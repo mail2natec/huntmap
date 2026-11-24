@@ -5,9 +5,9 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-title" content="Hunt Map">
+<meta name="apple-mobile-web-app-title" content="RoCo Hunt">
 <meta name="theme-color" content="#18201a">
-<title>Roanoke Hunt Map</title>
+<title>RoCo Hunt</title>
 <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
 <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
 <style>
@@ -94,7 +94,7 @@
 <div id="crosshair"></div>
 
 <div id="topbar">
-  <div class="chip" id="title">🦌 Roanoke Hunt Map</div>
+  <div class="chip" id="title">🦌 RoCo Hunt</div>
   <button class="chip" id="syncChip">Local only</button>
   <button class="chip" id="setupBtn" aria-label="Setup">⚙️</button>
 </div>
@@ -185,7 +185,7 @@ const saveDirty = () => LS.set("hm_dirty", [...dirty]);
     const cfg = JSON.parse(decodeURIComponent(escape(atob(decodeURIComponent(m[1])))));
     let msg = [];
     if (cfg.u && cfg.k){ settings.url = cfg.u; settings.key = cfg.k; msg.push("family sync connected"); }
-    if (Array.isArray(cfg.p) && cfg.p.length){ settings.parcels = cfg.p.map(String); settings.homeBounds = null; msg.push("your hunting land added"); }
+    if (Array.isArray(cfg.p) && cfg.p.length){ settings.parcels = cfg.p.map(String); settings.homeBounds = null; msg.push("hunting land added"); }
     saveSettings();
     if (msg.length) setTimeout(()=>toast("Setup done: " + msg.join(" & ") + " ✔", 3500), 800);
   } catch(e){ setTimeout(()=>toast("That setup link didn't work"), 800); }
@@ -267,7 +267,7 @@ map.on("load", () => {
   map.addLayer({id:"parcels-fill", type:"fill", source:"parcels", paint:{"fill-color":"#000","fill-opacity":0.01}});
   map.addLayer({id:"parcels-line", type:"line", source:"parcels", paint:{"line-color":"#ffd400","line-opacity":0.9,"line-width":["interpolate",["linear"],["zoom"],13,0.8,17,2.2]}});
 
-  map.addLayer({id:"ours-fill", type:"fill", source:"ours", paint:{"fill-color":"#ff8a1f","fill-opacity":0.1}});
+  map.addLayer({id:"ours-fill", type:"fill", source:"ours", paint:{"fill-color":"#000","fill-opacity":0.01}});
   map.addLayer({id:"ours-line", type:"line", source:"ours", paint:{"line-color":"#ff8a1f","line-width":["interpolate",["linear"],["zoom"],11,2,17,4.5]}});
 
   map.addLayer({id:"sel-line", type:"line", source:"sel", paint:{"line-color":"#ffffff","line-width":3.5,"line-dasharray":[2,1.5]}});
@@ -296,30 +296,58 @@ map.on("load", () => {
 map.on("moveend", () => { clearTimeout(loadParcels._t); loadParcels._t = setTimeout(loadParcels, 350); });
 
 /* ---------- data loading ---------- */
-const parcelCache = new Map();
+// Fetch with a time limit and automatic retries, for spotty signal in the field.
+async function getJSONRetry(url, tries = 3){
+  let last;
+  for (let i = 0; i < tries; i++){
+    try {
+      const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), 15000);
+      const r = await fetch(url, {signal: ctl.signal}); clearTimeout(t);
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      const j = await r.json(); if (j && j.error) throw new Error(j.error.message || "server error");
+      return j;
+    } catch(e){ last = e; if (i < tries - 1) await new Promise(res => setTimeout(res, [2000, 5000][i] || 5000)); }
+  }
+  throw last;
+}
+// Copies kept on this phone so layers still show if a server is down. Parcels are never stored on GitHub.
+const CACHE = {parcels:"hm_cache_parcels", ours:"hm_cache_ours", wma:"hm_cache_wma"};
+const MAX_CACHED_PARCELS = 700;
+
+const parcelCache = new Map(LS.get(CACHE.parcels, []).map(f => [f.properties.ParcelID, f]));
 let parcelReq = 0;
+function saveParcelCache(){
+  clearTimeout(saveParcelCache._t);
+  saveParcelCache._t = setTimeout(() => {
+    const feats = [...parcelCache.values()].slice(-MAX_CACHED_PARCELS);   // newest last
+    try { localStorage.setItem(CACHE.parcels, JSON.stringify(feats)); }
+    catch(e){ try { localStorage.setItem(CACHE.parcels, JSON.stringify(feats.slice(-200))); } catch(e2){} }
+  }, 1500);
+}
+function showParcels(){ if (map.getSource("parcels")) map.getSource("parcels").setData({type:"FeatureCollection", features:[...parcelCache.values()]}); }
 async function loadParcels(){
   if (!map.getSource("parcels")) return;
   const hint = $("#hint");
   if (!settings.showParcels){ hint.style.display="none"; return; }
   if (map.getZoom() < CFG.parcelMinZoom){ hint.textContent="Zoom in to see property lines"; hint.style.display="block"; return; }
   hint.style.display = "none";
+  showParcels();   // show saved copy right away
   const b = map.getBounds();
   const env = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()].map(v=>v.toFixed(5)).join(",");
   const my = ++parcelReq;
   try {
-    const j = await getJSON(arcQuery(CFG.parcelsLayer, {
+    const j = await getJSONRetry(arcQuery(CFG.parcelsLayer, {
       where:"1=1", geometry:env, geometryType:"esriGeometryEnvelope", inSR:"4326", spatialRel:"esriSpatialRelIntersects",
       outFields:"ParcelID,Owner1_2LastFirst,Calc_Acreage,Full_Address_String,LegalDescription", returnGeometry:"true",
       geometryPrecision:"6", resultRecordCount:"2000"
-    }));
+    }), 2);
     if (my !== parcelReq) return;
     if (parcelCache.size > 8000) parcelCache.clear();
-    (j.features||[]).forEach(f => { const id=f.properties && f.properties.ParcelID; if(id) parcelCache.set(id, f); });
-    map.getSource("parcels").setData({type:"FeatureCollection", features:[...parcelCache.values()]});
+    (j.features||[]).forEach(f => { const id=f.properties && f.properties.ParcelID; if(id){ parcelCache.delete(id); parcelCache.set(id, f); } });
+    showParcels(); saveParcelCache();
     if (j.exceededTransferLimit || (j.properties && j.properties.exceededTransferLimit)){ hint.textContent="Zoom in more to load every parcel"; hint.style.display="block"; }
   } catch(e){
-    if (my === parcelReq){ hint.textContent="Couldn't reach county parcel server"; hint.style.display="block"; }
+    if (my === parcelReq){ hint.textContent = parcelCache.size ? "County server not responding — showing saved lines" : "Couldn't reach county parcel server"; hint.style.display="block"; }
     console.warn("parcels", e);
   }
 }
@@ -333,10 +361,14 @@ async function loadOurs(flyHome){
   const src = map.getSource("ours"); if (!src) return;
   const ids = ourParcels().filter(p => /^[\w.\-]+$/.test(p));
   if (!ids.length){ src.setData(EMPTY); return; }
+  const cached = LS.get(CACHE.ours, null);
+  const cachedOk = cached && cached.key === ids.join("|");
+  if (cachedOk) src.setData(cached.data);   // show saved outline right away
   try {
     const where = "ParcelID IN (" + ids.map(p=>"'"+p+"'").join(",") + ")";
-    const j = await getJSON(arcQuery(CFG.parcelsLayer, {where, outFields:"ParcelID,Owner1_2LastFirst,Calc_Acreage,Full_Address_String,LegalDescription", returnGeometry:"true", geometryPrecision:"6"}));
+    const j = await getJSONRetry(arcQuery(CFG.parcelsLayer, {where, outFields:"ParcelID,Owner1_2LastFirst,Calc_Acreage,Full_Address_String,LegalDescription", returnGeometry:"true", geometryPrecision:"6"}));
     src.setData(j);
+    LS.set(CACHE.ours, {key: ids.join("|"), data: j});
     const b = boundsOf(j);
     if (b){
       const nb = b.toArray();
@@ -344,7 +376,10 @@ async function loadOurs(flyHome){
       settings.homeBounds = nb; saveSettings();
       if (first || flyHome) map.fitBounds(nb, {padding:40});
     }
-  } catch(e){ console.warn("ours", e); toast("Couldn't load your property outlines (county server)"); }
+  } catch(e){
+    console.warn("ours", e);
+    if (!cachedOk) toast("Couldn't load the hunting land outline (county server)");
+  }
 }
 function goHome(){
   if (settings.homeBounds) map.fitBounds(settings.homeBounds, {padding:40});
@@ -352,13 +387,23 @@ function goHome(){
   else { map.fitBounds(CFG.countyBounds, {padding:20}); toast("Add your parcels in Setup to set a home view"); }
 }
 async function loadWma(){
+  const src = map.getSource("wma");
+  const cached = LS.get(CACHE.wma, null);
+  if (cached) src.setData(cached);   // show saved boundaries right away
   try {
-    const j = await getJSON(arcQuery(CFG.wmaLayer, {
+    const j = await getJSONRetry(arcQuery(CFG.wmaLayer, {
       where:"1=1", geometry:CFG.regionBox.join(","), geometryType:"esriGeometryEnvelope", inSR:"4326", spatialRel:"esriSpatialRelIntersects",
       outFields:"WMA_NAME,ACRES,URL,Property_Type", returnGeometry:"true", geometryPrecision:"6"
     }));
-    map.getSource("wma").setData(j);
-  } catch(e){ console.warn("wma", e); toast("Couldn't load WMA boundaries (DWR server)"); }
+    if (!(j.features||[]).length) throw new Error("no WMAs returned");
+    src.setData(j);
+    try { localStorage.setItem(CACHE.wma, JSON.stringify(j)); } catch(e){}
+  } catch(e){
+    console.warn("wma live", e);
+    if (cached) return;
+    try { const j = await getJSONRetry("wma.json", 2); src.setData(j); }   // backup copy stored with the app
+    catch(e2){ console.warn("wma backup", e2); toast("Couldn't load WMA boundaries (DWR server)"); }
+  }
 }
 
 /* ---------- layers / basemap ---------- */
@@ -448,7 +493,7 @@ map.on("click", e => {
     const ours = ourParcels().includes(p.ParcelID);
     const full = parcelCache.get(p.ParcelID) || parcel.toJSON();
     map.getSource("sel").setData({type:"FeatureCollection", features:[full]});
-    html += `<span class="tag ${ours ? "ours" : "priv"}">${ours ? "YOUR HUNTING LAND" : "PRIVATE"}</span>
+    html += `<span class="tag ${ours ? "ours" : "priv"}">${ours ? "HUNTING LAND" : "PRIVATE"}</span>
       <h4>${esc(p.Owner1_2LastFirst || "Owner not listed")}</h4>
       <div class="k">${p.Calc_Acreage ? Number(p.Calc_Acreage).toFixed(1)+" ac · " : ""}Parcel ${esc(p.ParcelID)}</div>
       ${p.Full_Address_String ? `<div class="k">${esc(p.Full_Address_String)}</div>` : ""}
@@ -608,9 +653,9 @@ function openLayers(){
     <div class="toggle" style="margin-top:10px"><span>⛰️ 3D terrain</span><input type="checkbox" id="t3d" ${is3D?"checked":""}></div>
     <div class="toggle"><span>🟨 Property lines &amp; owners</span><input type="checkbox" id="tPar" ${settings.showParcels?"checked":""}></div>
     <div class="toggle"><span>🟦 Public hunting land (WMA, cyan outline)</span><input type="checkbox" id="tWma" ${settings.showWma?"checked":""}></div>
-    <div class="toggle"><span>🟧 Your hunting land outline</span><input type="checkbox" id="tOurs" ${settings.showOurs?"checked":""}></div>
+    <div class="toggle"><span>🟧 Hunting land outline</span><input type="checkbox" id="tOurs" ${settings.showOurs?"checked":""}></div>
     <p class="muted">In 3D, drag with two fingers to tilt and twist to rotate.</p>
-    <div class="row"><button class="btn" data-act="home">Zoom to our land</button><button class="btn" data-act="sheet-cancel">Close</button></div>`);
+    <div class="row"><button class="btn" data-act="home">Zoom to hunting land</button><button class="btn" data-act="sheet-cancel">Close</button></div>`);
   $("#bmSeg").addEventListener("click", e => { const b = e.target.closest("button[data-bm]"); if(!b) return; settings.basemap = b.dataset.bm; saveSettings(); applyBasemap(); document.querySelectorAll("#bmSeg button").forEach(x=>x.classList.toggle("sel", x===b)); });
   $("#t3d").addEventListener("change", e => set3D(e.target.checked));
   $("#tPar").addEventListener("change", e => { settings.showParcels = e.target.checked; saveSettings(); applyLayerVis(); });
@@ -622,7 +667,7 @@ function openSettings(){
   const on = syncOn();
   openSheet(`<h2>Setup</h2>
     <label>Your name (shows on marks you add)</label><input type="text" id="sName" maxlength="40" value="${esc(settings.name)}" placeholder="e.g. Nathan">
-    <h3>Our hunting land</h3>
+    <h3>Hunting land</h3>
     <label>Parcel IDs, one per line (saved on this phone only)</label>
     <textarea id="sParcels" style="min-height:70px" autocapitalize="off" autocorrect="off" placeholder="000.00-00-00.00-0000">${esc(ourParcels().join("\n"))}</textarea>
     <h3>Family sharing</h3>
@@ -652,7 +697,7 @@ function exportGPX(){
   const x = s => esc(s);
   const pts = liveMarks().filter(m=>m.kind==="point").map(m => `<wpt lat="${m.coords[1]}" lon="${m.coords[0]}"><name>${x(m.name || typeInfo(m.type).label)}</name><desc>${x(m.notes||"")}</desc><type>${x(typeInfo(m.type).label)}</type></wpt>`).join("\n");
   const trks = liveMarks().filter(m=>m.kind==="line").map(m => `<trk><name>${x(m.name || typeInfo(m.type).label)}</name><desc>${x(m.notes||"")}</desc><type>${x(typeInfo(m.type).label)}</type><trkseg>${m.coords.map(c=>`<trkpt lat="${c[1]}" lon="${c[0]}"/>`).join("")}</trkseg></trk>`).join("\n");
-  download("hunt-marks-"+new Date().toISOString().slice(0,10)+".gpx", `<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="Roanoke Hunt Map" xmlns="http://www.topografix.com/GPX/1/1">\n${pts}\n${trks}\n</gpx>`, "application/gpx+xml");
+  download("hunt-marks-"+new Date().toISOString().slice(0,10)+".gpx", `<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="RoCo Hunt" xmlns="http://www.topografix.com/GPX/1/1">\n${pts}\n${trks}\n</gpx>`, "application/gpx+xml");
 }
 function guessType(label, kind){
   const s = String(label||"").toLowerCase();
