@@ -7,6 +7,9 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="RoCo Hunt">
 <meta name="theme-color" content="#18201a">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
 <title>RoCo Hunt</title>
 <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
 <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
@@ -74,6 +77,13 @@
   .pin.priv{border-style:dashed;border-color:#ffd24a}
   .pin.priv::after{content:"🔒";position:absolute;right:-8px;top:-8px;font-size:12px}
   .pin{font-size:22px;line-height:30px;width:34px;height:34px;text-align:center;border-radius:50%;background:rgba(24,32,26,.9);border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.6);cursor:pointer}
+  .pin::before{content:"";position:absolute;inset:-7px;border-radius:50%}
+  /* Pins shrink as you zoom out so they don't pile up */
+  #map.zt-mid .pin{width:26px;height:26px;font-size:16px;line-height:22px}
+  #map.zt-mid .pin.priv::after{font-size:10px;right:-7px;top:-7px}
+  #map.zt-small .pin{width:18px;height:18px;font-size:11px;line-height:15px;border-width:1.5px}
+  #map.zt-dot .pin{width:10px;height:10px;font-size:0;line-height:0;border-width:1.5px;background:#ff8a1f}
+  #map.zt-small .pin.priv::after,#map.zt-dot .pin.priv::after{display:none}
   .maplibregl-popup-content{background:var(--panel);color:var(--text);border-radius:12px;padding:12px 14px;max-width:270px;box-shadow:0 4px 18px rgba(0,0,0,.5)}
   .maplibregl-popup-tip{border-top-color:var(--panel)!important;border-bottom-color:var(--panel)!important}
   .maplibregl-popup-close-button{color:var(--muted);font-size:20px;padding:2px 8px}
@@ -285,9 +295,9 @@ map.on("load", () => {
   LINE_TYPES.forEach(t => colorExpr.push(t.id, t.color));
   colorExpr.push("#ffffff");
   const dashIds = LINE_TYPES.filter(t=>t.dash).map(t=>t.id);
-  map.addLayer({id:"lines-casing", type:"line", source:"lines", layout:{"line-cap":"round","line-join":"round"}, paint:{"line-color":"#000","line-opacity":0.55,"line-width":7}});
-  map.addLayer({id:"lines-solid", type:"line", source:"lines", filter:["!", ["in", ["get","type"], ["literal", dashIds]]], layout:{"line-cap":"round","line-join":"round"}, paint:{"line-color":colorExpr,"line-width":4}});
-  map.addLayer({id:"lines-dash", type:"line", source:"lines", filter:["in", ["get","type"], ["literal", dashIds]], layout:{"line-join":"round"}, paint:{"line-color":colorExpr,"line-width":4,"line-dasharray":[2,1.2]}});
+  map.addLayer({id:"lines-casing", type:"line", source:"lines", layout:{"line-cap":"round","line-join":"round"}, paint:{"line-color":"#000","line-opacity":0.55,"line-width":["interpolate",["linear"],["zoom"],12,3.5,16,7]}});
+  map.addLayer({id:"lines-solid", type:"line", source:"lines", filter:["!", ["in", ["get","type"], ["literal", dashIds]]], layout:{"line-cap":"round","line-join":"round"}, paint:{"line-color":colorExpr,"line-width":["interpolate",["linear"],["zoom"],12,2,16,4]}});
+  map.addLayer({id:"lines-dash", type:"line", source:"lines", filter:["in", ["get","type"], ["literal", dashIds]], layout:{"line-join":"round"}, paint:{"line-color":colorExpr,"line-width":["interpolate",["linear"],["zoom"],12,2,16,4],"line-dasharray":[2,1.2]}});
   map.addLayer({id:"lines-hit", type:"line", source:"lines", paint:{"line-color":"#000","line-opacity":0.01,"line-width":22}});
 
   map.addLayer({id:"draft-line", type:"line", source:"draft", filter:["==",["geometry-type"],"LineString"], paint:{"line-color":"#fff","line-width":3,"line-dasharray":[1.5,1]}});
@@ -454,6 +464,18 @@ function renderMarks(){
   });
   if (map.getSource("lines")) map.getSource("lines").setData({type:"FeatureCollection", features:lines});
 }
+// Pin size tier by zoom: full ≥16, medium 15–16, small 13.5–15, dot below 13.5
+let zoomTier = "";
+function updateZoomTier(){
+  const z = map.getZoom();
+  const t = z >= 16 ? "" : z >= 15 ? "zt-mid" : z >= 13.5 ? "zt-small" : "zt-dot";
+  if (t === zoomTier) return;
+  const c = map.getContainer().classList;
+  if (zoomTier) c.remove(zoomTier);
+  if (t) c.add(t);
+  zoomTier = t;
+}
+map.on("zoom", updateZoomTier); updateZoomTier();
 function upsertMark(m){
   m.updated = Date.now();
   if (!m.by) m.by = settings.name || "";
@@ -1007,6 +1029,7 @@ document.addEventListener("click", async e => {
   }
 });
 })();
+if ("serviceWorker" in navigator) addEventListener("load", () => navigator.serviceWorker.register("sw.js").catch(()=>{}));
 </script>
 </body>
 </html>
