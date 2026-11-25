@@ -458,9 +458,14 @@ function deleteMark(id){
 }
 
 let popup = null;
-function openPopup(lngLat, html){
+function setSelection(feature){ const s = map.getSource("sel"); if (s) s.setData(feature ? {type:"FeatureCollection", features:[feature]} : EMPTY); }
+// The parcel highlight lives only as long as its pop-up: closing the pop-up clears it.
+function openPopup(lngLat, html, selFeature){
   if (popup) popup.remove();
-  popup = new maplibregl.Popup({maxWidth:"290px", closeOnClick:true, focusAfterOpen:false}).setLngLat(lngLat).setHTML(html).addTo(map);
+  setSelection(selFeature || null);
+  const p = new maplibregl.Popup({maxWidth:"290px", closeOnClick:true, focusAfterOpen:false}).setLngLat(lngLat).setHTML(html);
+  p.on("close", () => { if (popup === p){ popup = null; setSelection(null); } });
+  popup = p.addTo(map);
 }
 function showMarkPopup(id, lngLat){
   const m = marks[id]; if (!m) return;
@@ -486,13 +491,13 @@ map.on("click", e => {
   const hits = map.queryRenderedFeatures(e.point, {layers});
   const wma = hits.find(h => h.layer.id === "wma-fill");
   const parcel = hits.find(h => h.layer.id === "ours-fill") || hits.find(h => h.layer.id === "parcels-fill");
-  if (!wma && !parcel){ if (map.getSource("sel")) map.getSource("sel").setData(EMPTY); return; }
-  let html = '<div class="pop">';
+  if (!wma && !parcel){ if (popup) popup.remove(); setSelection(null); return; }
+  let html = '<div class="pop">', selFeature = null;
   if (parcel){
     const p = parcel.properties;
     const ours = ourParcels().includes(p.ParcelID);
     const full = parcelCache.get(p.ParcelID) || parcel.toJSON();
-    map.getSource("sel").setData({type:"FeatureCollection", features:[full]});
+    selFeature = full;
     html += `<span class="tag ${ours ? "ours" : "priv"}">${ours ? "HUNTING LAND" : "PRIVATE"}</span>
       <h4>${esc(p.Owner1_2LastFirst || "Owner not listed")}</h4>
       <div class="k">${p.Calc_Acreage ? Number(p.Calc_Acreage).toFixed(1)+" ac · " : ""}Parcel ${esc(p.ParcelID)}</div>
@@ -508,7 +513,7 @@ map.on("click", e => {
       ${url ? `<div style="margin-top:6px"><a href="${esc(url)}" target="_blank" rel="noopener">WMA rules &amp; seasons ↗</a></div>` : ""}</div>`;
   }
   html += `<div class="k" style="margin-top:8px">Tax-map lines, not a survey.</div></div>`;
-  openPopup(e.lngLat, html);
+  openPopup(e.lngLat, html, selFeature);
 });
 
 /* ================= MODES ================= */
