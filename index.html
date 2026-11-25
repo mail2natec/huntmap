@@ -71,6 +71,8 @@
   .list-item .t div:first-child{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .list-item .t div:last-child{font-size:12px;color:var(--muted)}
   .muted{color:var(--muted);font-size:13px}
+  .pin.priv{border-style:dashed;border-color:#ffd24a}
+  .pin.priv::after{content:"🔒";position:absolute;right:-8px;top:-8px;font-size:12px}
   .pin{font-size:22px;line-height:30px;width:34px;height:34px;text-align:center;border-radius:50%;background:rgba(24,32,26,.9);border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.6);cursor:pointer}
   .maplibregl-popup-content{background:var(--panel);color:var(--text);border-radius:12px;padding:12px 14px;max-width:270px;box-shadow:0 4px 18px rgba(0,0,0,.5)}
   .maplibregl-popup-tip{border-top-color:var(--panel)!important;border-bottom-color:var(--panel)!important}
@@ -174,6 +176,13 @@ let dirty = new Set(LS.get("hm_dirty", []));
 let track = LS.get("hm_track", null);   // in-progress GPS track {pts:[[lng,lat]...], start}
 let lastSync = 0, syncError = "";
 const saveMarks = () => LS.set("hm_marks", marks);
+// Private marks live in their own store on this phone and are never uploaded.
+let privateMarks = LS.get("hm_private", {});
+const savePrivate = () => LS.set("hm_private", privateMarks);
+const getMark = id => marks[id] || privateMarks[id];
+// Sign-in session for family sharing (email + 6-digit code).
+let auth = LS.get("hm_auth", null);
+const saveAuth = () => LS.set("hm_auth", auth);
 const saveSettings = () => LS.set("hm_settings", settings);
 const saveDirty = () => LS.set("hm_dirty", [...dirty]);
 
@@ -192,7 +201,7 @@ const saveDirty = () => LS.set("hm_dirty", [...dirty]);
   history.replaceState(null, "", location.pathname + location.search);
 })();
 // A setup link opened in a tab that already had the app open only changes the hash: reload to apply it.
-window.addEventListener("hashchange", () => { if (/^#setup=/.test(location.hash)) location.reload(); });
+window.addEventListener("hashchange", () => { if (/^#setup=|[#&](access_token|error)=/.test(location.hash)) location.reload(); });
 
 /* ================= HELPERS ================= */
 const $ = s => document.querySelector(s);
@@ -429,14 +438,14 @@ function set3D(on){
 
 /* ================= MARKS ================= */
 let domMarkers = [];
-function liveMarks(){ return Object.values(marks).filter(m => !m.deleted); }
+function liveMarks(){ return Object.values(marks).filter(m => !m.deleted).concat(Object.values(privateMarks)); }
 function renderMarks(){
   domMarkers.forEach(m => m.remove()); domMarkers = [];
   const lines = [];
   liveMarks().forEach(m => {
     if (m.kind === "point"){
       const el = document.createElement("div");
-      el.className = "pin"; el.textContent = typeInfo(m.type).e; el.title = m.name || typeInfo(m.type).label;
+      el.className = "pin" + (m.private ? " priv" : ""); el.textContent = typeInfo(m.type).e; el.title = m.name || typeInfo(m.type).label;
       el.addEventListener("click", ev => { ev.stopPropagation(); if (mode) return; showMarkPopup(m.id, m.coords); });
       domMarkers.push(new maplibregl.Marker({element:el}).setLngLat(m.coords).addTo(map));
     } else if (m.kind === "line" && m.coords && m.coords.length > 1){
@@ -448,10 +457,24 @@ function renderMarks(){
 function upsertMark(m){
   m.updated = Date.now();
   if (!m.by) m.by = settings.name || "";
-  marks[m.id] = m; dirty.add(m.id);
-  saveMarks(); saveDirty(); renderMarks(); syncSoon();
+  if (m.private){
+    if (marks[m.id] && !marks[m.id].deleted){
+      // Was shared: remove the shared copy for everyone, keep a private copy under a new id.
+      marks[m.id] = {id:m.id, kind:m.kind, deleted:true, updated:m.updated};
+      dirty.add(m.id); saveMarks(); saveDirty(); syncSoon();
+      m = Object.assign({}, m, {id: uid()});
+    }
+    privateMarks[m.id] = m; savePrivate();
+  } else {
+    if (privateMarks[m.id]){ delete privateMarks[m.id]; savePrivate(); }
+    delete m.private;
+    marks[m.id] = m; dirty.add(m.id);
+    saveMarks(); saveDirty(); syncSoon();
+  }
+  renderMarks();
 }
 function deleteMark(id){
+  if (privateMarks[id]){ delete privateMarks[id]; savePrivate(); renderMarks(); return; }
   const m = marks[id]; if (!m) return;
   marks[id] = {id, kind:m.kind, deleted:true, updated:Date.now()};
   dirty.add(id); saveMarks(); saveDirty(); renderMarks(); syncSoon();
@@ -468,14 +491,14 @@ function openPopup(lngLat, html, selFeature){
   popup = p.addTo(map);
 }
 function showMarkPopup(id, lngLat){
-  const m = marks[id]; if (!m) return;
+  const m = getMark(id); if (!m) return;
   const t = typeInfo(m.type);
   let extra = "";
   if (m.kind === "line") extra = `<div class="k">Length: ${fmtDist(pathLen(m.coords))}</div>`;
   if (m.kind === "point" && myPos){ const d = haversine(myPos, m.coords); extra = `<div class="k">From you: ${fmtDist(d)} ${bearing(myPos, m.coords)}</div>`; }
   const coordTxt = m.kind==="point" ? `<div class="k">${m.coords[1].toFixed(5)}, ${m.coords[0].toFixed(5)}</div>` : "";
   openPopup(lngLat, `<div class="pop"><h4>${t.e} ${esc(m.name || t.label)}</h4>
-    <div class="k">${esc(t.label)}${m.by ? " · added by "+esc(m.by) : ""}${m.created ? " · "+fmtDate(m.created) : ""}</div>
+    ${m.private ? `<div class="k">🔒 Private — only on this phone</div>` : ""}<div class="k">${esc(t.label)}${m.by && !m.private ? " · added by "+esc(m.by) : ""}${m.created ? " · "+fmtDate(m.created) : ""}</div>
     ${m.notes ? `<div class="note">${esc(m.notes)}</div>` : ""}${extra}${coordTxt}
     <div class="row" style="margin-top:10px"><button class="btn small" data-act="edit" data-id="${esc(id)}">Edit</button><button class="btn small danger" data-act="del" data-id="${esc(id)}">Delete</button></div></div>`);
 }
@@ -604,11 +627,12 @@ let editing = null;
 function openMarkForm(m){
   editing = m;
   const types = m.kind === "point" ? POINT_TYPES : LINE_TYPES;
-  const isNew = !marks[m.id];
+  const isNew = !getMark(m.id);
   openSheet(`<h2>${isNew ? "New " + (m.kind==="point" ? "pin" : "line") : "Edit"}</h2>
     <div class="typegrid" id="typegrid">${types.map(t => `<button data-type="${t.id}" class="${t.id===m.type?"sel":""}"><span class="e">${t.e}</span>${t.label}</button>`).join("")}</div>
     <label>Name</label><input type="text" id="fName" maxlength="80" placeholder="e.g. Ridge ladder stand" value="${esc(m.name||"")}">
     <label>Notes</label><textarea id="fNotes" placeholder="Wind, card checks, sightings…">${esc(m.notes||"")}</textarea>
+    <div class="toggle" style="border:0;margin-top:6px"><span>🔒 Private <span class="muted">— stays on this phone, never shared</span></span><input type="checkbox" id="fPriv" ${m.private?"checked":""}></div>
     ${m.kind==="line" ? `<div class="muted" style="margin-top:8px">Length: ${fmtDist(pathLen(m.coords))}</div>` : `<div class="muted" style="margin-top:8px">${m.coords[1].toFixed(5)}, ${m.coords[0].toFixed(5)}</div>`}
     <div class="row"><button class="btn" data-act="sheet-cancel">Cancel</button><button class="btn primary" data-act="mark-save">Save</button></div>
     ${!isNew ? `<div class="row"><button class="btn danger" data-act="del" data-id="${esc(m.id)}">Delete</button></div>` : ""}`);
@@ -622,22 +646,26 @@ function saveMarkForm(){
   if (!editing) return;
   editing.name = $("#fName").value.trim();
   editing.notes = $("#fNotes").value.trim();
+  editing.private = $("#fPriv").checked;
   if (!editing.created) editing.created = Date.now();
-  upsertMark(editing); editing = null; closeSheet(); toast("Saved");
+  const priv = editing.private;
+  upsertMark(editing); editing = null; closeSheet(); toast(priv ? "Saved privately on this phone" : "Saved");
 }
 
 function openMarksList(filter){
   const all = liveMarks().sort((a,b) => (b.updated||0) - (a.updated||0));
-  const items = all.filter(m => !filter || m.type === filter);
+  const items = all.filter(m => !filter || (filter === "@private" ? m.private : filter === "@shared" ? !m.private : m.type === filter));
   const usedTypes = [...new Set(all.map(m=>m.type))];
+  const nPriv = all.filter(m => m.private).length;
   openSheet(`<h2>Marks (${all.length})</h2>
-    <select id="mFilter"><option value="">All types</option>${usedTypes.map(t=>`<option value="${t}" ${t===filter?"selected":""}>${typeInfo(t).e} ${typeInfo(t).label}</option>`).join("")}</select>
+    <select id="mFilter"><option value="">All marks</option><option value="@shared" ${filter==="@shared"?"selected":""}>👪 Shared only</option><option value="@private" ${filter==="@private"?"selected":""}>🔒 My private only (${nPriv})</option>${usedTypes.map(t=>`<option value="${t}" ${t===filter?"selected":""}>${typeInfo(t).e} ${typeInfo(t).label}</option>`).join("")}</select>
     <div style="margin-top:8px">${items.length ? items.map(m => {
       const t = typeInfo(m.type);
-      const sub = [t.label, m.kind==="line" ? fmtDist(pathLen(m.coords)) : (myPos ? fmtDist(haversine(myPos, m.coords))+" away" : ""), m.by].filter(Boolean).join(" · ");
+      const sub = [m.private ? "🔒 Private" : "", t.label, m.kind==="line" ? fmtDist(pathLen(m.coords)) : (myPos ? fmtDist(haversine(myPos, m.coords))+" away" : ""), m.private ? "" : m.by].filter(Boolean).join(" · ");
       return `<div class="list-item" data-act="goto" data-id="${esc(m.id)}"><div class="e">${t.e}</div><div class="t"><div>${esc(m.name || t.label)}</div><div>${esc(sub)}</div></div><div>›</div></div>`;
     }).join("") : `<p class="muted">No marks yet. Use 📍 Pin or 〰️ Line to add stands, cameras, trails and roads.</p>`}</div>
     <h3>Backup &amp; trade files</h3>
+    ${nPriv ? `<p class="muted">🔒 Your ${nPriv} private mark${nPriv===1?"":"s"} exist only on this phone. Export GeoJSON now and then to back them up — it keeps the private setting when imported.</p>` : ""}
     <div class="row"><button class="btn" data-act="exp-gpx">Export GPX</button><button class="btn" data-act="exp-json">Export GeoJSON</button></div>
     <div class="row"><button class="btn" data-act="import">Import GPX / GeoJSON</button></div>
     <input type="file" id="importFile" accept=".gpx,.geojson,.json,application/gpx+xml,application/json" style="display:none">
@@ -646,7 +674,7 @@ function openMarksList(filter){
   $("#importFile").addEventListener("change", e => { const f = e.target.files[0]; if (f) importFile(f); });
 }
 function gotoMark(id){
-  const m = marks[id]; if (!m) return; closeSheet();
+  const m = getMark(id); if (!m) return; closeSheet();
   if (m.kind === "point"){ map.flyTo({center:m.coords, zoom:Math.max(map.getZoom(), 17)}); setTimeout(()=>showMarkPopup(id, m.coords), 900); }
   else { const b = new maplibregl.LngLatBounds(m.coords[0], m.coords[0]); m.coords.forEach(c=>b.extend(c)); map.fitBounds(b, {padding:80, maxZoom:17}); setTimeout(()=>showMarkPopup(id, m.coords[Math.floor(m.coords.length/2)]), 900); }
 }
@@ -669,18 +697,26 @@ function openLayers(){
 }
 
 function openSettings(){
-  const on = syncOn();
   openSheet(`<h2>Setup</h2>
     <label>Your name (shows on marks you add)</label><input type="text" id="sName" maxlength="40" value="${esc(settings.name)}" placeholder="e.g. Nathan">
     <h3>Hunting land</h3>
     <label>Parcel IDs, one per line (saved on this phone only)</label>
     <textarea id="sParcels" style="min-height:70px" autocapitalize="off" autocorrect="off" placeholder="000.00-00-00.00-0000">${esc(ourParcels().join("\n"))}</textarea>
+    <div class="row"><button class="btn primary" data-act="set-save">Save</button></div>
     <h3>Family sharing</h3>
-    <p class="muted">${on ? (syncError ? "⚠️ Sync problem: "+esc(syncError) : "✅ Connected. Marks sync with everyone using this link.") : "Off — marks are saved on this phone only. Connect a free Supabase database to share marks with family."}</p>
-    <label>Supabase project URL</label><input type="text" id="sUrl" value="${esc(settings.url)}" placeholder="https://xxxx.supabase.co" autocapitalize="off" autocorrect="off">
-    <label>Supabase publishable (anon) key</label><input type="password" id="sKey" value="${esc(settings.key)}" placeholder="sb_publishable_… or eyJ…" autocapitalize="off" autocorrect="off">
-    <div class="row"><button class="btn primary" data-act="set-save">Save</button><button class="btn" data-act="sync-now" ${on?"":"disabled"}>Sync now</button></div>
-    ${(on || ourParcels().length) ? `<div class="row"><button class="btn" data-act="copy-link">Copy family setup link</button></div><p class="muted">The link carries your parcel IDs${on ? " and sync key" : ""}. Text it to family; opening it sets up their phone. Share it only with family.</p>` : ""}
+    ${!sbConfigured() ? `<p class="muted">Not connected. Open the family setup link on this phone to connect.</p>`
+      : !auth ? `<p class="muted">Sign in with your email to share marks with family. We'll email you a sign-in link.</p>
+        <label>Email</label><input type="email" id="sEmail" value="${esc(settings.email||"")}" placeholder="you@example.com" autocapitalize="off" autocorrect="off" inputmode="email">
+        <div class="row"><button class="btn primary" data-act="send-link">${settings.linkSentTo ? "Send a new link" : "Email me a sign-in link"}</button></div>
+        <p class="muted" id="linkNote" style="display:${settings.linkSentTo ? "block" : "none"}">📧 Link sent to <b>${esc(settings.linkSentTo||"")}</b>. Open the email <b>on this phone</b> and tap the link — RoCo Hunt opens signed in. Can take a minute; check spam. On iPhone, open RoCo Hunt in Safari to sign in.</p>`
+      : `<p class="muted">Signed in as <b>${esc(auth.email)}</b>.<br>${auth.family === false ? "⛔ This email isn't on the family list yet — ask the map owner to add it." : syncError ? "⚠️ Sync problem: " + esc(syncError) : "✅ Shared marks sync with the family. 🔒 Private marks stay on this phone."}</p>
+        <div class="row"><button class="btn" data-act="sync-now">Sync now</button><button class="btn" data-act="sign-out">Sign out</button></div>`}
+    ${(sbConfigured() || ourParcels().length) ? `<div class="row"><button class="btn" data-act="copy-link">Copy family setup link</button></div><p class="muted">The link carries the parcel IDs and connection settings. Family members still need to sign in, and only emails on the family list can see shared marks.</p>` : ""}
+    <details style="margin-top:10px"><summary class="muted">Advanced connection settings</summary>
+      <label>Supabase project URL</label><input type="text" id="sUrl" value="${esc(settings.url)}" placeholder="https://xxxx.supabase.co" autocapitalize="off" autocorrect="off">
+      <label>Supabase publishable key</label><input type="password" id="sKey" value="${esc(settings.key)}" placeholder="sb_publishable_…" autocapitalize="off" autocorrect="off">
+      <div class="row"><button class="btn" data-act="set-save">Save</button></div>
+    </details>
     <h3>About</h3>
     <p class="muted">Property lines and owners: Roanoke County GIS. Public land: Virginia DWR. These are tax-map lines, not surveys; they can be off by tens of feet. Know the real boundary and check DWR rules before hunting.</p>
     <div class="row"><button class="btn" data-act="sheet-cancel">Close</button></div>`);
@@ -694,7 +730,7 @@ function download(name, text, mime){
 }
 function exportGeoJSON(){
   const fc = {type:"FeatureCollection", features: liveMarks().map(m => ({type:"Feature",
-    properties:{id:m.id, kind:m.kind, type:m.type, name:m.name||"", notes:m.notes||"", by:m.by||"", created:m.created||null, updated:m.updated||null},
+    properties:{id:m.id, kind:m.kind, type:m.type, name:m.name||"", notes:m.notes||"", by:m.by||"", created:m.created||null, updated:m.updated||null, private:!!m.private},
     geometry: m.kind==="point" ? {type:"Point", coordinates:m.coords} : {type:"LineString", coordinates:m.coords}}))};
   download("hunt-marks-"+new Date().toISOString().slice(0,10)+".geojson", JSON.stringify(fc, null, 1), "application/geo+json");
 }
@@ -712,7 +748,7 @@ function guessType(label, kind){
 }
 async function importFile(file){
   const text = await file.text(); let n = 0;
-  const add = m => { if (!m.coords) return; if (!m.id || marks[m.id]) m.id = uid(); m.created = m.created || Date.now(); upsertMark(m); n++; };
+  const add = m => { if (!m.coords) return; if (!m.id || getMark(m.id)) m.id = uid(); m.created = m.created || Date.now(); upsertMark(m); n++; };
   try {
     if (/\.gpx$/i.test(file.name) || text.trim().startsWith("<")){
       const doc = new DOMParser().parseFromString(text, "application/xml");
@@ -726,22 +762,81 @@ async function importFile(file){
       const j = JSON.parse(text);
       (j.features || []).forEach(f => {
         const p = f.properties || {}, geom = f.geometry || {};
-        if (geom.type === "Point") add({id:p.id, kind:"point", type:POINT_TYPES.some(t=>t.id===p.type) ? p.type : guessType(p.type||p.name,"point"), name:p.name||"", notes:p.notes||p.description||"", by:p.by||"", created:p.created, coords:geom.coordinates.slice(0,2)});
-        else if (geom.type === "LineString") add({id:p.id, kind:"line", type:LINE_TYPES.some(t=>t.id===p.type) ? p.type : guessType(p.type||p.name,"line"), name:p.name||"", notes:p.notes||p.description||"", by:p.by||"", created:p.created, coords:geom.coordinates.map(c=>c.slice(0,2))});
+        const priv = p.private === true;
+        if (geom.type === "Point") add({id:p.id, private:priv, kind:"point", type:POINT_TYPES.some(t=>t.id===p.type) ? p.type : guessType(p.type||p.name,"point"), name:p.name||"", notes:p.notes||p.description||"", by:p.by||"", created:p.created, coords:geom.coordinates.slice(0,2)});
+        else if (geom.type === "LineString") add({id:p.id, private:priv, kind:"line", type:LINE_TYPES.some(t=>t.id===p.type) ? p.type : guessType(p.type||p.name,"line"), name:p.name||"", notes:p.notes||p.description||"", by:p.by||"", created:p.created, coords:geom.coordinates.map(c=>c.slice(0,2))});
       });
     }
     closeSheet(); toast("Imported " + n + " mark" + (n===1?"":"s"));
   } catch(e){ toast("Couldn't read that file"); console.warn(e); }
 }
 
-/* ================= SYNC (Supabase REST) ================= */
-function syncOn(){ return !!(settings.url && settings.key); }
+/* ================= SIGN-IN (Supabase Auth: email + 6-digit code) ================= */
+function sbConfigured(){ return !!(settings.url && settings.key); }
+function syncOn(){ return sbConfigured() && !!auth; }
+function sbBase(){ return settings.url.replace(/\/+$/,""); }
+async function authPost(path, body, token){
+  const h = {apikey: settings.key, "Content-Type":"application/json"};
+  if (token) h.Authorization = "Bearer " + token;
+  const r = await fetch(sbBase() + "/auth/v1" + path, {method:"POST", headers:h, body:JSON.stringify(body || {})});
+  let j = null; try { j = await r.json(); } catch(e){}
+  if (!r.ok){ const err = new Error((j && (j.msg || j.error_description || j.message || j.error)) || ("HTTP " + r.status)); err.status = r.status; throw err; }
+  return j;
+}
+function storeSession(j){
+  auth = {access_token:j.access_token, refresh_token:j.refresh_token, expires_at: Date.now() + (j.expires_in || 3600) * 1000,
+          email: (j.user && j.user.email) || (auth && auth.email) || settings.email || "", family: auth ? auth.family : undefined};
+  saveAuth();
+}
+let refreshing = null;
+async function accessToken(){
+  if (!auth) return null;
+  if (Date.now() > auth.expires_at - 120000){
+    if (!refreshing) refreshing = authPost("/token?grant_type=refresh_token", {refresh_token: auth.refresh_token})
+      .then(storeSession)
+      .catch(e => { if (e.status === 400 || e.status === 401 || e.status === 403){ auth = null; saveAuth(); updateSyncChip(); } throw e; })
+      .finally(() => { refreshing = null; });
+    await refreshing;
+  }
+  return auth ? auth.access_token : null;
+}
+const APP_URL = () => location.origin + location.pathname;
+async function sendLink(email){ await authPost("/otp?redirect_to=" + encodeURIComponent(APP_URL()), {email, create_user:true}); }
+function jwtEmail(t){ try { return JSON.parse(decodeURIComponent(escape(atob(t.split(".")[1].replace(/-/g,"+").replace(/_/g,"/"))))).email || ""; } catch(e){ return ""; } }
+// The emailed link returns here with #access_token=…&refresh_token=… (or #error=…).
+function readAuthHash(){
+  if (!/[#&](access_token|error)=/.test(location.hash)) return false;
+  const h = new URLSearchParams(location.hash.slice(1));
+  history.replaceState(null, "", location.pathname + location.search);
+  if (h.get("error")){ setTimeout(() => toast("Sign-in link problem: " + (h.get("error_description") || h.get("error")).replace(/\+/g," ") + ". Request a new link.", 6000), 800); return true; }
+  const at = h.get("access_token");
+  auth = {access_token: at, refresh_token: h.get("refresh_token"), expires_at: Date.now() + (+h.get("expires_in") || 3600) * 1000, email: jwtEmail(at) || settings.email || ""};
+  saveAuth();
+  if (!settings.name && auth.email){ settings.name = auth.email.split("@")[0]; }
+  settings.linkSentTo = ""; saveSettings();
+  Object.keys(marks).forEach(k => dirty.add(k)); saveDirty();   // share marks made before signing in
+  setTimeout(() => toast("Signed in as " + auth.email + " ✔", 3500), 800);
+  return true;
+}
+async function sendCode(email){ await authPost("/otp", {email, create_user:true}); }
+async function verifyCode(email, code){
+  storeSession(await authPost("/verify", {type:"email", email, token:code}));
+  if (!settings.name){ settings.name = email.split("@")[0]; saveSettings(); }
+  Object.keys(marks).forEach(k => dirty.add(k)); saveDirty();   // share marks made before signing in
+}
+async function signOut(){
+  try { if (auth) await authPost("/logout", {}, auth.access_token); } catch(e){}
+  auth = null; saveAuth(); lastSync = 0; syncError = ""; updateSyncChip();
+}
+
+/* ================= SYNC (shared marks only — private marks never leave the phone) ================= */
 async function sb(path, opts){
   opts = opts || {};
-  const headers = Object.assign({apikey: settings.key, "Content-Type":"application/json"}, opts.headers || {});
-  if (!settings.key.startsWith("sb_")) headers.Authorization = "Bearer " + settings.key;
-  const r = await fetch(settings.url.replace(/\/+$/,"") + "/rest/v1/" + path, Object.assign({}, opts, {headers}));
-  if (!r.ok){ let t = ""; try{ t = (await r.json()).message || ""; }catch(e){} throw new Error("HTTP " + r.status + (t ? " – " + t : "")); }
+  const token = await accessToken();
+  if (!token) throw new Error("not signed in");
+  const headers = Object.assign({apikey: settings.key, Authorization: "Bearer " + token, "Content-Type":"application/json"}, opts.headers || {});
+  const r = await fetch(sbBase() + "/rest/v1/" + path, Object.assign({}, opts, {headers}));
+  if (!r.ok){ let t = ""; try{ t = (await r.json()).message || ""; }catch(e){} const err = new Error("HTTP " + r.status + (t ? " – " + t : "")); err.status = r.status; throw err; }
   if (r.status === 204) return null;
   const txt = await r.text(); return txt ? JSON.parse(txt) : null;
 }
@@ -750,9 +845,15 @@ async function syncNow(manual){
   if (!syncOn() || syncing) return;
   syncing = true; updateSyncChip("Syncing…");
   try {
+    if (auth.family !== true){
+      const ok = await sb("rpc/is_family", {method:"POST", body:"{}"});
+      if (!auth) return;
+      auth.family = ok === true; saveAuth();
+      if (!auth.family){ syncError = "not on family list"; if (manual) toast("Your email isn't on the family list yet", 4000); return; }
+    }
     if (dirty.size){
       const ids = [...dirty];
-      const rows = ids.map(id => marks[id]).filter(Boolean).map(m => ({id:m.id, data:m, updated:m.updated||Date.now(), deleted:!!m.deleted}));
+      const rows = ids.map(id => marks[id]).filter(m => m && !m.private).map(m => ({id:m.id, data:m, updated:m.updated||Date.now(), deleted:!!m.deleted}));
       if (rows.length) await sb("marks?on_conflict=id", {method:"POST", headers:{Prefer:"resolution=merge-duplicates,return=minimal"}, body:JSON.stringify(rows)});
       ids.forEach(id => dirty.delete(id)); saveDirty();
     }
@@ -760,13 +861,14 @@ async function syncNow(manual){
     let changed = false;
     (remote || []).forEach(r => {
       const loc = marks[r.id];
-      if (dirty.has(r.id)) return;
+      if (dirty.has(r.id) || privateMarks[r.id]) return;
       if (!loc || (r.updated || 0) > (loc.updated || 0)){ marks[r.id] = r.data; changed = true; }
     });
     if (changed){ saveMarks(); renderMarks(); }
     lastSync = Date.now(); syncError = "";
     if (manual) toast("Synced ✔");
   } catch(e){
+    if (e.status === 401 || e.status === 403){ if (auth) { auth.family = undefined; saveAuth(); } }
     syncError = e.message || "network error"; console.warn("sync", e);
     if (manual) toast("Sync failed: " + syncError, 4000);
   } finally { syncing = false; updateSyncChip(); }
@@ -775,7 +877,9 @@ function syncSoon(){ clearTimeout(syncSoon._t); syncSoon._t = setTimeout(() => s
 function updateSyncChip(txt){
   const c = $("#syncChip");
   if (txt){ c.textContent = txt; return; }
-  if (!syncOn()){ c.textContent = "📱 Local only"; return; }
+  if (!sbConfigured()){ c.textContent = "📱 Local only"; return; }
+  if (!auth){ c.textContent = "🔑 Sign in"; return; }
+  if (auth.family === false){ c.textContent = "⛔ Not on family list"; return; }
   if (syncError){ c.textContent = "⚠️ Sync issue"; return; }
   if (!lastSync){ c.textContent = "🔄 Family sync"; return; }
   const mins = Math.round((Date.now() - lastSync)/60000);
@@ -783,6 +887,7 @@ function updateSyncChip(txt){
 }
 setInterval(() => { if (document.visibilityState === "visible") syncNow(false); else updateSyncChip(); }, CFG.syncEveryMs);
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") syncNow(false); });
+readAuthHash();
 updateSyncChip(); syncNow(false);
 
 /* ================= EVENT WIRING ================= */
@@ -835,7 +940,7 @@ document.addEventListener("click", async e => {
     case "track-center": if (myPos) map.easeTo({center:myPos, zoom:Math.max(map.getZoom(), 16)}); else toast("Waiting for GPS…"); break;
     case "mark-save": saveMarkForm(); break;
     case "sheet-cancel": editing = null; closeSheet(); break;
-    case "edit": if (popup) popup.remove(); openMarkForm(JSON.parse(JSON.stringify(marks[id]))); break;
+    case "edit": if (popup) popup.remove(); openMarkForm(JSON.parse(JSON.stringify(getMark(id)))); break;
     case "del":
       if (el.dataset.confirm !== "1"){ el.dataset.confirm = "1"; el.textContent = "Tap again to delete"; break; }
       if (popup) popup.remove(); closeSheet(); deleteMark(id); toast("Deleted"); break;
@@ -848,17 +953,51 @@ document.addEventListener("click", async e => {
       settings.name = $("#sName").value.trim();
       const newParcels = $("#sParcels").value.split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
       if (newParcels.join("|") !== ourParcels().join("|")){ settings.parcels = newParcels; settings.homeBounds = null; saveSettings(); loadOurs(true); }
-      settings.url = $("#sUrl").value.trim();
-      settings.key = $("#sKey").value.trim();
+      const newUrl = $("#sUrl").value.trim(), newKey = $("#sKey").value.trim();
+      if (newUrl !== settings.url || newKey !== settings.key){ settings.url = newUrl; settings.key = newKey; auth = null; saveAuth(); }
       saveSettings();
-      if (syncOn()){ Object.keys(marks).forEach(k => dirty.add(k)); saveDirty(); }
-      closeSheet(); updateSyncChip(); toast("Saved"); syncNow(true);
+      closeSheet(); updateSyncChip(); toast("Saved"); syncNow(false);
+      break;
+    }
+    case "send-link": {
+      const email = ($("#sEmail").value || "").trim().toLowerCase();
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)){ toast("Enter a valid email"); break; }
+      el.disabled = true; el.textContent = "Sending…";
+      try {
+        await sendLink(email); settings.email = email; settings.linkSentTo = email; saveSettings();
+        const n = $("#linkNote"); n.innerHTML = "📧 Link sent to <b>" + esc(email) + "</b>. Open the email <b>on this phone</b> and tap the link — RoCo Hunt opens signed in. Can take a minute; check spam. On iPhone, open RoCo Hunt in Safari to sign in."; n.style.display = "block";
+        el.textContent = "Send a new link";
+      } catch(err){ toast(/rate|too many|seconds/i.test(err.message) ? "Too many emails right now — wait a bit and try again" : "Couldn't send link: " + err.message, 5000); el.textContent = "Email me a sign-in link"; }
+      el.disabled = false;
+      break;
+    }
+    case "send-code": {
+      const email = ($("#sEmail").value || "").trim().toLowerCase();
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)){ toast("Enter a valid email"); break; }
+      el.disabled = true; el.textContent = "Sending…";
+      try { await sendCode(email); settings.email = email; settings.codeSentTo = email; saveSettings(); $("#codeBox").style.display = "block"; toast("Code sent to " + email, 3500); el.textContent = "Send a new code"; }
+      catch(err){ toast("Couldn't send code: " + err.message, 5000); el.textContent = "Email me a code"; }
+      el.disabled = false;
+      break;
+    }
+    case "verify-code": {
+      const email = settings.codeSentTo || ($("#sEmail").value || "").trim().toLowerCase();
+      const code = ($("#sCode").value || "").replace(/\D/g, "");
+      if (code.length < 6){ toast("Enter the code from the email"); break; }
+      el.disabled = true; el.textContent = "Signing in…";
+      try { await verifyCode(email, code); settings.codeSentTo = ""; saveSettings(); closeSheet(); toast("Signed in ✔"); await syncNow(true); }
+      catch(err){ toast("Sign-in failed: " + err.message, 5000); el.disabled = false; el.textContent = "Sign in"; }
+      break;
+    }
+    case "sign-out": {
+      if (el.dataset.confirm !== "1"){ el.dataset.confirm = "1"; el.textContent = "Tap again to sign out"; break; }
+      await signOut(); closeSheet(); toast("Signed out. Private marks stay on this phone.");
       break;
     }
     case "sync-now": closeSheet(); syncNow(true); break;
     case "copy-link": {
       const cfg = {p: ourParcels()};
-      if (syncOn()){ cfg.u = settings.url; cfg.k = settings.key; }
+      if (sbConfigured()){ cfg.u = settings.url; cfg.k = settings.key; }
       const payload = encodeURIComponent(btoa(unescape(encodeURIComponent(JSON.stringify(cfg)))));
       const link = location.origin + location.pathname + "#setup=" + payload;
       try { await navigator.clipboard.writeText(link); toast("Setup link copied — text it to family"); }
