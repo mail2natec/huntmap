@@ -314,6 +314,19 @@ map.on("load", () => {
 
 map.on("moveend", () => { clearTimeout(loadParcels._t); loadParcels._t = setTimeout(loadParcels, 350); });
 
+// Android can wipe the map's graphics memory while the app sits in the background,
+// leaving imagery and outlines blank. When that happens, reload once you're back
+// (waits if you're in the middle of drawing a line or measuring; GPS tracks survive a reload).
+let glLost = false;
+map.on("webglcontextlost", () => { glLost = true; });
+function recoverMap(){
+  if (!glLost || document.visibilityState !== "visible") return;
+  if ((mode === "line" || mode === "measure") && draft.length){ clearTimeout(recoverMap._t); recoverMap._t = setTimeout(recoverMap, 3000); return; }
+  glLost = false; location.reload();
+}
+map.on("webglcontextrestored", recoverMap);
+document.addEventListener("visibilitychange", recoverMap);
+
 /* ---------- data loading ---------- */
 // Fetch with a time limit and automatic retries, for spotty signal in the field.
 async function getJSONRetry(url, tries = 3){
@@ -793,6 +806,11 @@ async function importFile(file){
   } catch(e){ toast("Couldn't read that file"); console.warn(e); }
 }
 
+// fetch with a time limit, so a request frozen while the app was in the background can't hang sync forever
+async function fetchT(url, opts, ms = 20000){
+  const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), ms);
+  try { return await fetch(url, Object.assign({}, opts, {signal: ctl.signal})); } finally { clearTimeout(t); }
+}
 /* ================= SIGN-IN (Supabase Auth: email + 6-digit code) ================= */
 function sbConfigured(){ return !!(settings.url && settings.key); }
 function syncOn(){ return sbConfigured() && !!auth; }
@@ -800,7 +818,7 @@ function sbBase(){ return settings.url.replace(/\/+$/,""); }
 async function authPost(path, body, token){
   const h = {apikey: settings.key, "Content-Type":"application/json"};
   if (token) h.Authorization = "Bearer " + token;
-  const r = await fetch(sbBase() + "/auth/v1" + path, {method:"POST", headers:h, body:JSON.stringify(body || {})});
+  const r = await fetchT(sbBase() + "/auth/v1" + path, {method:"POST", headers:h, body:JSON.stringify(body || {})});
   let j = null; try { j = await r.json(); } catch(e){}
   if (!r.ok){ const err = new Error((j && (j.msg || j.error_description || j.message || j.error)) || ("HTTP " + r.status)); err.status = r.status; throw err; }
   return j;
@@ -857,7 +875,7 @@ async function sb(path, opts){
   const token = await accessToken();
   if (!token) throw new Error("not signed in");
   const headers = Object.assign({apikey: settings.key, Authorization: "Bearer " + token, "Content-Type":"application/json"}, opts.headers || {});
-  const r = await fetch(sbBase() + "/rest/v1/" + path, Object.assign({}, opts, {headers}));
+  const r = await fetchT(sbBase() + "/rest/v1/" + path, Object.assign({}, opts, {headers}));
   if (!r.ok){ let t = ""; try{ t = (await r.json()).message || ""; }catch(e){} const err = new Error("HTTP " + r.status + (t ? " – " + t : "")); err.status = r.status; throw err; }
   if (r.status === 204) return null;
   const txt = await r.text(); return txt ? JSON.parse(txt) : null;
