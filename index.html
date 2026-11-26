@@ -989,13 +989,20 @@ async function syncNow(manual){
       ids.forEach(id => dirty.delete(id)); saveDirty();
     }
     const remote = await sb("marks?select=id,data,updated&limit=5000");
-    let changed = false;
+    let changed = false, needPush = false;
+    const seen = new Set();
     (remote || []).forEach(r => {
+      seen.add(r.id);
       const loc = marks[r.id];
       if (dirty.has(r.id) || privateMarks[r.id]) return;
       if (!loc || (r.updated || 0) > (loc.updated || 0)){ marks[r.id] = r.data; changed = true; }
+      // This phone has a newer edit or deletion than the server (it never got through): send it again
+      else if ((loc.updated || 0) > (r.updated || 0)){ dirty.add(r.id); needPush = true; }
     });
+    // Shared marks this phone has that the server has never seen: send them too
+    Object.keys(marks).forEach(id => { if (!seen.has(id) && !dirty.has(id)){ dirty.add(id); needPush = true; } });
     if (changed){ saveMarks(); renderMarks(); }
+    if (needPush){ saveDirty(); syncSoon(); }
     lastSync = Date.now(); syncError = "";
     if (manual) toast("Synced ✔");
   } catch(e){
