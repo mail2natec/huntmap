@@ -196,13 +196,58 @@ const saveAuth = () => LS.set("hm_auth", auth);
 const saveSettings = () => LS.set("hm_settings", settings);
 const saveDirty = () => LS.set("hm_dirty", [...dirty]);
 
-// Family setup link: #setup=<base64 json>
+/* ---------- Hunting groups ----------
+   Each group (its own map, sync project and member list) keeps its data apart on this phone.
+   The live hm_* keys always hold the active group; other groups are stored whole under hm_g_<id>. */
+const GROUP_FIELDS = ["url","key","parcels","homeBounds","linkSentTo"];
+let groups = LS.get("hm_groups", null);
+if (!groups){ groups = {active:"g1", list:{g1:{label:"Group 1"}}}; LS.set("hm_groups", groups); }
+const saveGroups = () => LS.set("hm_groups", groups);
+const groupCount = () => Object.keys(groups.list).length;
+const activeGroup = () => groups.list[groups.active] || {label:"Group 1"};
+function snapshotActive(){
+  const st = {}; GROUP_FIELDS.forEach(f => st[f] = settings[f]);
+  return {settings:st, marks, dirty:[...dirty], private:privateMarks, auth, ours:LS.get("hm_cache_ours", null)};
+}
+function loadIntoLive(g){
+  g = g || {};
+  const st = g.settings || {};
+  GROUP_FIELDS.forEach(f => settings[f] = st[f] !== undefined ? st[f] : (f === "parcels" ? [] : f === "homeBounds" ? null : ""));
+  marks = g.marks || {}; dirty = new Set(g.dirty || []); privateMarks = g.private || {}; auth = g.auth || null;
+  saveSettings(); saveMarks(); saveDirty(); savePrivate(); saveAuth();
+  if (g.ours) LS.set("hm_cache_ours", g.ours); else localStorage.removeItem("hm_cache_ours");
+}
+// Swap the live data to another group (or a brand-new empty one when id is new)
+function activateGroup(id, label){
+  if (id === groups.active) return;
+  LS.set("hm_g_" + groups.active, snapshotActive());
+  loadIntoLive(LS.get("hm_g_" + id, null));
+  localStorage.removeItem("hm_g_" + id);
+  if (!groups.list[id]) groups.list[id] = {label: label || ("Group " + (groupCount() + 1))};
+  groups.active = id; saveGroups();
+}
+function groupIdForUrl(url){
+  for (const id of Object.keys(groups.list)){
+    const u = id === groups.active ? settings.url : ((LS.get("hm_g_" + id, {}) || {}).settings || {}).url;
+    if (u && u === url) return id;
+  }
+  return null;
+}
+
+// Family setup link: #setup=<base64 json>  {p:[parcels], u:url, k:key, n:group name}
 (function readSetupLink(){
   const m = location.hash.match(/^#setup=(.+)$/);
   if (!m) return;
   try {
     const cfg = JSON.parse(decodeURIComponent(escape(atob(decodeURIComponent(m[1])))));
     let msg = [];
+    // A link for a different sync project = a different group: never mix its data with this one
+    if (cfg.u && settings.url && cfg.u !== settings.url){
+      const existing = groupIdForUrl(cfg.u);
+      activateGroup(existing || ("g" + Date.now().toString(36)), cfg.n);
+      msg.push(existing ? "switched to " + activeGroup().label : "added group " + activeGroup().label);
+    }
+    if (cfg.n && groupCount() === 1){ activeGroup().label = String(cfg.n).slice(0,40); saveGroups(); }
     if (cfg.u && cfg.k){ settings.url = cfg.u; settings.key = cfg.k; msg.push("family sync connected"); }
     if (Array.isArray(cfg.p) && cfg.p.length){ settings.parcels = cfg.p.map(String); settings.homeBounds = null; msg.push("hunting land added"); }
     saveSettings();
@@ -217,6 +262,7 @@ window.addEventListener("hashchange", () => { if (/^#setup=|[#&](access_token|er
 const $ = s => document.querySelector(s);
 const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() : "m" + Date.now().toString(36) + Math.random().toString(36).slice(2));
+if (groupCount() > 1) $("#title").textContent = "🦌 " + activeGroup().label;
 function toast(msg, ms=2600){ const t=$("#toast"); t.textContent=msg; t.style.display="block"; clearTimeout(toast._t); toast._t=setTimeout(()=>t.style.display="none", ms); }
 function haversine(a, b){ const R=6371008.8, r=Math.PI/180; const dLat=(b[1]-a[1])*r, dLon=(b[0]-a[0])*r; const x=Math.sin(dLat/2)**2+Math.cos(a[1]*r)*Math.cos(b[1]*r)*Math.sin(dLon/2)**2; return 2*R*Math.asin(Math.sqrt(x)); }
 function pathLen(c){ let d=0; for(let i=1;i<c.length;i++) d+=haversine(c[i-1],c[i]); return d; }
@@ -734,6 +780,11 @@ function openLayers(){
 function openSettings(){
   openSheet(`<h2>Setup</h2>
     <label>Your name (shows on marks you add)</label><input type="text" id="sName" maxlength="40" value="${esc(settings.name)}" placeholder="e.g. Nathan">
+    ${groupCount() > 1 ? `<h3>Hunting groups</h3>
+      <label>This group's name</label><input type="text" id="sGroup" maxlength="40" value="${esc(activeGroup().label)}">
+      ${Object.keys(groups.list).filter(id => id !== groups.active).map(id => { const g = LS.get("hm_g_" + id, {}) || {}; const n = Object.keys(g.marks||{}).filter(k => !(g.marks[k]||{}).deleted).length;
+        return `<div class="row" style="align-items:center"><span style="flex:1"><b>${esc(groups.list[id].label)}</b><br><span class="muted">${n} shared marks saved${g.pulledAt ? " · updated " + new Date(g.pulledAt).toLocaleString() : ""}${g.auth ? "" : " · not signed in"}</span></span><button class="btn primary" data-act="grp-switch" data-id="${id}">Switch</button><button class="btn" data-act="grp-remove" data-id="${id}">Remove</button></div>`; }).join("")}
+      <p class="muted">Each group's marks, sign-in and private pins are kept separate on this phone.</p>` : ""}
     <h3>Hunting land</h3>
     <label>Parcel IDs, one per line (saved on this phone only)</label>
     <textarea id="sParcels" style="min-height:70px" autocapitalize="off" autocorrect="off" placeholder="000.00-00-00.00-0000">${esc(ourParcels().join("\n"))}</textarea>
@@ -913,6 +964,34 @@ async function syncNow(manual){
     if (manual) toast("Sync failed: " + syncError, 4000);
   } finally { syncing = false; updateSyncChip(); }
 }
+// Keep a fresh copy of every other group's shared marks on this phone (download only).
+async function refreshOtherGroups(){
+  if (groupCount() < 2 || !navigator.onLine) return;
+  for (const id of Object.keys(groups.list)){
+    if (id === groups.active) continue;
+    const g = LS.get("hm_g_" + id, null);
+    if (!g || !g.auth || !g.settings || !g.settings.url || !g.settings.key) continue;
+    const base = g.settings.url.replace(/\/+$/,""), H = {apikey: g.settings.key, "Content-Type":"application/json"};
+    try {
+      if (Date.now() > g.auth.expires_at - 120000){
+        const r = await fetchT(base + "/auth/v1/token?grant_type=refresh_token", {method:"POST", headers:H, body:JSON.stringify({refresh_token:g.auth.refresh_token})});
+        if (!r.ok){ if (r.status === 400 || r.status === 401) { g.auth = null; LS.set("hm_g_" + id, g); } continue; }
+        const j = await r.json();
+        g.auth = Object.assign({}, g.auth, {access_token:j.access_token, refresh_token:j.refresh_token, expires_at: Date.now() + (j.expires_in||3600)*1000});
+      }
+      const r = await fetchT(base + "/rest/v1/marks?select=id,data,updated&limit=5000", {headers: Object.assign({Authorization:"Bearer " + g.auth.access_token}, H)});
+      if (!r.ok) continue;
+      const rows = await r.json(), skip = new Set(g.dirty || []);
+      g.marks = g.marks || {};
+      rows.forEach(row => { const loc = g.marks[row.id]; if (!skip.has(row.id) && (!loc || (row.updated||0) > (loc.updated||0))) g.marks[row.id] = row.data; });
+      g.pulledAt = Date.now();
+      // write back without clobbering a switch that happened meanwhile
+      if (id !== groups.active) LS.set("hm_g_" + id, g);
+    } catch(e){ console.warn("group refresh", id, e); }
+  }
+}
+setInterval(() => { if (document.visibilityState === "visible") refreshOtherGroups(); }, 5 * 60000);
+setTimeout(refreshOtherGroups, 8000);
 function syncSoon(){ clearTimeout(syncSoon._t); syncSoon._t = setTimeout(() => syncNow(false), 800); }
 function updateSyncChip(txt){
   const c = $("#syncChip");
@@ -991,6 +1070,7 @@ document.addEventListener("click", async e => {
     case "home": closeSheet(); goHome(); break;
     case "set-save": {
       settings.name = $("#sName").value.trim();
+      if ($("#sGroup") && $("#sGroup").value.trim()){ activeGroup().label = $("#sGroup").value.trim(); saveGroups(); $("#title").textContent = "🦌 " + activeGroup().label; }
       const newParcels = $("#sParcels").value.split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
       if (newParcels.join("|") !== ourParcels().join("|")){ settings.parcels = newParcels; settings.homeBounds = null; saveSettings(); loadOurs(true); }
       const newUrl = $("#sUrl").value.trim(), newKey = $("#sKey").value.trim();
@@ -1035,8 +1115,20 @@ document.addEventListener("click", async e => {
       break;
     }
     case "sync-now": closeSheet(); syncNow(true); break;
+    case "grp-switch": {
+      if (track){ toast("Finish or stop your GPS track before switching groups", 4000); break; }
+      if (mode){ toast("Finish what you're drawing first", 3500); break; }
+      activateGroup(el.dataset.id); location.reload(); break;
+    }
+    case "grp-remove": {
+      if (el.dataset.confirm !== "1"){ el.dataset.confirm = "1"; el.textContent = "Tap again to remove"; break; }
+      localStorage.removeItem("hm_g_" + el.dataset.id); delete groups.list[el.dataset.id]; saveGroups();
+      closeSheet(); toast("Group removed from this phone"); if (groupCount() === 1) $("#title").textContent = "🦌 RoCo Hunt";
+      break;
+    }
     case "copy-link": {
       const cfg = {p: ourParcels()};
+      if (groupCount() > 1) cfg.n = activeGroup().label;
       if (sbConfigured()){ cfg.u = settings.url; cfg.k = settings.key; }
       const payload = encodeURIComponent(btoa(unescape(encodeURIComponent(JSON.stringify(cfg)))));
       const link = location.origin + location.pathname + "#setup=" + payload;
