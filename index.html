@@ -810,7 +810,7 @@ function openSettings(){
       : !auth ? `<p class="muted">Sign in with your email to share marks with family. We'll email you a sign-in link.</p>
         <label>Email</label><input type="email" id="sEmail" value="${esc(settings.email||"")}" placeholder="you@example.com" autocapitalize="off" autocorrect="off" inputmode="email">
         <div class="row"><button class="btn primary" data-act="send-link">${settings.linkSentTo ? "Send a new link" : "Email me a sign-in link"}</button></div>
-        <p class="muted" id="linkNote" style="display:${settings.linkSentTo ? "block" : "none"}">📧 Link sent to <b>${esc(settings.linkSentTo||"")}</b>. Open the email <b>on this phone</b> and tap the link — RoCo Hunt opens signed in. Can take a minute; check spam. On iPhone, open RoCo Hunt in Safari to sign in.</p>`
+        <p class="muted" id="linkNote" style="display:${settings.linkSentTo ? "block" : "none"}">📧 Link sent to <b>${esc(settings.linkSentTo||"")}</b>. Open the email <b>on this phone</b> and tap the link — RoCo Hunt opens signed in. Can take a minute; check spam. Using RoCo Hunt from an iPhone home-screen icon? Don't tap the link: press and hold it, tap <b>Copy</b>, then paste it under <b>Paste a link</b> below.</p>`
       : `<p class="muted">Signed in as <b>${esc(auth.email)}</b>.<br>${auth.family === false ? "⛔ This email isn't on the family list yet — ask the map owner to add it." : syncError ? "⚠️ Sync problem: " + esc(syncError) : "✅ Shared marks sync with the family. 🔒 Private marks stay on this phone."}</p>
         <div class="row"><button class="btn" data-act="sync-now">Sync now</button><button class="btn" data-act="sign-out">Sign out</button></div>`}
     ${(sbConfigured() || ourParcels().length) ? `<div class="row"><button class="btn" data-act="copy-link">Copy family setup link</button></div><p class="muted">The link carries the parcel IDs and connection settings. Family members still need to sign in, and only emails on the family list can see shared marks.</p>` : ""}
@@ -819,6 +819,10 @@ function openSettings(){
       <label>Supabase publishable key</label><input type="password" id="sKey" value="${esc(settings.key)}" placeholder="sb_publishable_…" autocapitalize="off" autocorrect="off">
       <div class="row"><button class="btn" data-act="set-save">Save</button></div>
     </details>
+    <h3>Paste a link</h3>
+    <p class="muted">For the iPhone home-screen app: paste a setup link, or a sign-in link copied from the email (copy it without tapping it).</p>
+    <input type="text" id="sPaste" placeholder="Paste link here" autocapitalize="off" autocorrect="off" spellcheck="false">
+    <div class="row"><button class="btn" data-act="paste-link">Use link</button></div>
     <h3>About</h3>
     <p class="muted">Property lines and owners: Roanoke County GIS. Public land: Virginia DWR. These are tax-map lines, not surveys; they can be off by tens of feet. Know the real boundary and check DWR rules before hunting.</p>
     <div class="row"><button class="btn" data-act="sheet-cancel">Close</button></div>`);
@@ -1109,7 +1113,7 @@ document.addEventListener("click", async e => {
       el.disabled = true; el.textContent = "Sending…";
       try {
         await sendLink(email); settings.email = email; settings.linkSentTo = email; saveSettings();
-        const n = $("#linkNote"); n.innerHTML = "📧 Link sent to <b>" + esc(email) + "</b>. Open the email <b>on this phone</b> and tap the link — RoCo Hunt opens signed in. Can take a minute; check spam. On iPhone, open RoCo Hunt in Safari to sign in."; n.style.display = "block";
+        const n = $("#linkNote"); n.innerHTML = "📧 Link sent to <b>" + esc(email) + "</b>. Open the email <b>on this phone</b> and tap the link — RoCo Hunt opens signed in. Can take a minute; check spam. Using RoCo Hunt from an iPhone home-screen icon? Don't tap the link: press and hold it, tap <b>Copy</b>, then paste it under <b>Paste a link</b> below."; n.style.display = "block";
         el.textContent = "Send a new link";
       } catch(err){ toast(/rate|too many|seconds/i.test(err.message) ? "Too many emails right now — wait a bit and try again" : "Couldn't send link: " + err.message, 5000); el.textContent = "Email me a sign-in link"; }
       el.disabled = false;
@@ -1139,6 +1143,34 @@ document.addEventListener("click", async e => {
       break;
     }
     case "sync-now": closeSheet(); syncNow(true); break;
+    case "paste-link": {
+      const txt = ($("#sPaste").value || "").trim();
+      const found = txt.match(/https?:\/\/\S+/);
+      let u; try { u = new URL(found ? found[0] : txt); } catch(e){ toast("That doesn't look like a link"); break; }
+      if (/^#setup=/.test(u.hash) || /[#&]access_token=/.test(u.hash)){ closeSheet(); location.hash = u.hash; break; }   // the page reloads and applies it
+      if (/\/auth\/v1\/verify$/.test(u.pathname) && u.searchParams.get("token")){
+        // Sign-in email link: only ever sent to a sync project already set up on this phone
+        const base = u.origin;
+        const gid = groupIdForUrl(base);
+        const key = normUrl(settings.url) === base ? settings.key : (gid ? (((LS.get("hm_g_" + gid, {}) || {}).settings) || {}).key : "");
+        if (!key){ toast("That sign-in link is for a group not set up on this phone. Paste its setup link first.", 6000); break; }
+        el.disabled = true; el.textContent = "Signing in…";
+        try {
+          const r = await fetchT(base + "/auth/v1/verify", {method:"POST", headers:{apikey:key, "Content-Type":"application/json"},
+            body: JSON.stringify({type: u.searchParams.get("type") || "magiclink", token_hash: u.searchParams.get("token")})});
+          let j = {}; try { j = await r.json(); } catch(e){}
+          if (!r.ok || !j.access_token) throw new Error(j.msg || j.error_description || j.message || ("HTTP " + r.status));
+          closeSheet();
+          location.hash = "access_token=" + encodeURIComponent(j.access_token) + "&refresh_token=" + encodeURIComponent(j.refresh_token) + "&expires_in=" + (j.expires_in || 3600);
+        } catch(err){
+          toast("That sign-in link didn't work (" + err.message + "). Request a new one and copy it without tapping it.", 7000);
+          el.disabled = false; el.textContent = "Use link";
+        }
+        break;
+      }
+      toast("That isn't a RoCo Hunt setup or sign-in link", 4000);
+      break;
+    }
     case "grp-switch": {
       if (track){ toast("Finish or stop your GPS track before switching groups", 4000); break; }
       if (mode){ toast("Finish what you're drawing first", 3500); break; }
