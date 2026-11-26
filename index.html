@@ -248,14 +248,22 @@ function groupIdForUrl(url){
     const cfg = JSON.parse(decodeURIComponent(escape(atob(decodeURIComponent(m[1])))));
     let msg = [];
     // A link for a different sync project = a different group: never mix its data with this one
-    if (cfg.u && settings.url && cfg.u !== settings.url){
-      const existing = groupIdForUrl(cfg.u);
+    const target = cfg.u || cfg.iu;
+    if (target && settings.url && normUrl(target) !== normUrl(settings.url)){
+      const existing = groupIdForUrl(target);
+      if (!existing && !cfg.u) throw new Error("unknown group");
       activateGroup(existing || ("g" + Date.now().toString(36)), cfg.n);
       msg.push(existing ? "switched to " + activeGroup().label : "added group " + activeGroup().label);
     }
     if (cfg.n && groupCount() === 1){ activeGroup().label = String(cfg.n).slice(0,40); saveGroups(); }
     if (cfg.u && cfg.k){ settings.url = cfg.u; settings.key = cfg.k; msg.push("family sync connected"); }
     if (Array.isArray(cfg.p) && cfg.p.length){ settings.parcels = cfg.p.map(String); settings.homeBounds = null; msg.push("hunting land added"); }
+    // Sign-in handed over from Safari (iPhone home-screen app); it refreshes itself on first use
+    if (cfg.r && settings.url && settings.key){
+      auth = {access_token:"", refresh_token:String(cfg.r), expires_at:0, email:String(cfg.e || "")}; saveAuth();
+      if (!settings.name && auth.email) settings.name = auth.email.split("@")[0];
+      settings.linkSentTo = ""; msg.push("signed in" + (auth.email ? " as " + auth.email : ""));
+    }
     saveSettings();
     if (msg.length) setTimeout(()=>toast("Setup done: " + msg.join(" & ") + " ✔", 3500), 800);
   } catch(e){ setTimeout(()=>toast("That setup link didn't work"), 800); }
@@ -277,6 +285,8 @@ window.addEventListener("hashchange", () => { if (/^#setup=|[#&](access_token|er
 /* ================= HELPERS ================= */
 const $ = s => document.querySelector(s);
 const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const IS_IOS = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+const IS_STANDALONE = navigator.standalone === true || !!(window.matchMedia && matchMedia("(display-mode: standalone)").matches);
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() : "m" + Date.now().toString(36) + Math.random().toString(36).slice(2));
 if (groupCount() > 1) $("#title").textContent = "🦌 " + activeGroup().label;
 function toast(msg, ms=2600){ const t=$("#toast"); t.textContent=msg; t.style.display="block"; clearTimeout(toast._t); toast._t=setTimeout(()=>t.style.display="none", ms); }
@@ -806,11 +816,11 @@ function openSettings(){
     <textarea id="sParcels" style="min-height:70px" autocapitalize="off" autocorrect="off" placeholder="000.00-00-00.00-0000">${esc(ourParcels().join("\n"))}</textarea>
     <div class="row"><button class="btn primary" data-act="set-save">Save</button></div>
     <h3>Family sharing</h3>
-    ${!sbConfigured() ? `<p class="muted">Not connected. Open the family setup link on this phone to connect.</p>`
-      : !auth ? `<p class="muted">Sign in with your email to share marks with family. We'll email you a sign-in link.</p>
+    ${!sbConfigured() ? `<p class="muted">Not connected. Open the family setup link on this phone to connect.</p>${IS_IOS && IS_STANDALONE ? `<div class="row"><button class="btn primary" data-act="paste-clip">📋 Paste sign-in from Safari</button></div><p class="muted">iPhone home-screen app: open the setup link and the sign-in email link in <b>Safari</b>, tap <b>Copy sign-in for home-screen app</b> there, then come back and tap this.</p>` : ""}`
+      : !auth ? `<p class="muted">Sign in with your email to share marks with family. We'll email you a sign-in link.</p>${IS_IOS && IS_STANDALONE ? `<div class="row"><button class="btn primary" data-act="paste-clip">📋 Paste sign-in from Safari</button></div><p class="muted">iPhone home-screen app: open the setup link and the sign-in email link in <b>Safari</b>, tap <b>Copy sign-in for home-screen app</b> there, then come back and tap this.</p>` : ""}
         <label>Email</label><input type="email" id="sEmail" value="${esc(settings.email||"")}" placeholder="you@example.com" autocapitalize="off" autocorrect="off" inputmode="email">
         <div class="row"><button class="btn primary" data-act="send-link">${settings.linkSentTo ? "Send a new link" : "Email me a sign-in link"}</button></div>
-        <p class="muted" id="linkNote" style="display:${settings.linkSentTo ? "block" : "none"}">📧 Link sent to <b>${esc(settings.linkSentTo||"")}</b>. Open the email <b>on this phone</b> and tap the link — RoCo Hunt opens signed in. Can take a minute; check spam. Using RoCo Hunt from an iPhone home-screen icon? Don't tap the link: press and hold it, tap <b>Copy</b>, then paste it under <b>Paste a link</b> below.</p>`
+        <p class="muted" id="linkNote" style="display:${settings.linkSentTo ? "block" : "none"}">📧 Link sent to <b>${esc(settings.linkSentTo||"")}</b>. Open the email <b>on this phone</b> and tap the link — RoCo Hunt opens signed in. Can take a minute; check spam.${IS_IOS && IS_STANDALONE ? " On iPhone the link opens in Safari: tap <b>Copy sign-in for home-screen app</b> there, then come back and tap <b>Paste sign-in from Safari</b>." : ""}</p>`
       : `<p class="muted">Signed in as <b>${esc(auth.email)}</b>.<br>${auth.family === false ? "⛔ This email isn't on the family list yet — ask the map owner to add it." : syncError ? "⚠️ Sync problem: " + esc(syncError) : "✅ Shared marks sync with the family. 🔒 Private marks stay on this phone."}</p>
         <div class="row"><button class="btn" data-act="sync-now">Sync now</button><button class="btn" data-act="sign-out">Sign out</button></div>`}
     ${(sbConfigured() || ourParcels().length) ? `<div class="row"><button class="btn" data-act="copy-link">Copy family setup link</button></div><p class="muted">The link carries the parcel IDs and connection settings. Family members still need to sign in, and only emails on the family list can see shared marks.</p>` : ""}
@@ -820,7 +830,7 @@ function openSettings(){
       <div class="row"><button class="btn" data-act="set-save">Save</button></div>
     </details>
     <h3>Paste a link</h3>
-    <p class="muted">For the iPhone home-screen app: paste a setup link, or a sign-in link copied from the email (copy it without tapping it).</p>
+    <p class="muted">Paste a setup link or a copied sign-in here if tapping it doesn't work on this phone.</p>
     <input type="text" id="sPaste" placeholder="Paste link here" autocapitalize="off" autocorrect="off" spellcheck="false">
     <div class="row"><button class="btn" data-act="paste-link">Use link</button></div>
     <h3>About</h3>
@@ -933,6 +943,7 @@ function readAuthHash(){
   if (!settings.name && auth.email){ settings.name = auth.email.split("@")[0]; }
   settings.linkSentTo = ""; saveSettings();
   Object.keys(marks).forEach(k => dirty.add(k)); saveDirty();   // share marks made before signing in
+  try { sessionStorage.setItem("hm_offer_xfer", "1"); } catch(e){}
   if (switchedGroup){ location.reload(); return true; }   // reopen showing the group just signed into
   setTimeout(() => toast("Signed in as " + auth.email + " ✔", 3500), 800);
   return true;
@@ -1037,6 +1048,26 @@ document.addEventListener("visibilitychange", () => { if (document.visibilitySta
 readAuthHash();
 updateSyncChip(); syncNow(false);
 
+// iPhone: a home-screen icon can't see Safari's sign-in, so offer to hand it over with one copy/paste
+function transferLink(){
+  const cfg = {p: ourParcels(), u: settings.url, k: settings.key, r: auth.refresh_token, e: auth.email || ""};
+  if (groupCount() > 1) cfg.n = activeGroup().label;
+  return location.origin + location.pathname + "#setup=" + encodeURIComponent(btoa(unescape(encodeURIComponent(JSON.stringify(cfg)))));
+}
+function showTransferOffer(){
+  openSheet(`<h2>✅ Signed in</h2>
+    <p>Using RoCo Hunt from an icon on your Home Screen? It needs this sign-in too:</p>
+    <p>1. Tap <b>Copy sign-in</b> below.<br>2. Open RoCo Hunt from your Home Screen.<br>3. Tap <b>⚙️</b>, then <b>📋 Paste sign-in from Safari</b>.</p>
+    <div class="row"><button class="btn primary" data-act="xfer-copy">Copy sign-in for home-screen app</button></div>
+    <div class="row"><button class="btn" data-act="sheet-cancel">I use RoCo Hunt in Safari, close</button></div>`);
+}
+try {
+  if (sessionStorage.getItem("hm_offer_xfer")){
+    sessionStorage.removeItem("hm_offer_xfer");
+    if (IS_IOS && !IS_STANDALONE && auth && sbConfigured()) setTimeout(showTransferOffer, 1500);
+  }
+} catch(e){}
+
 /* ================= EVENT WIRING ================= */
 $("#toolbar").addEventListener("click", e => {
   const b = e.target.closest("button[data-tool]"); if (!b) return;
@@ -1113,7 +1144,7 @@ document.addEventListener("click", async e => {
       el.disabled = true; el.textContent = "Sending…";
       try {
         await sendLink(email); settings.email = email; settings.linkSentTo = email; saveSettings();
-        const n = $("#linkNote"); n.innerHTML = "📧 Link sent to <b>" + esc(email) + "</b>. Open the email <b>on this phone</b> and tap the link — RoCo Hunt opens signed in. Can take a minute; check spam. Using RoCo Hunt from an iPhone home-screen icon? Don't tap the link: press and hold it, tap <b>Copy</b>, then paste it under <b>Paste a link</b> below."; n.style.display = "block";
+        const n = $("#linkNote"); n.innerHTML = "📧 Link sent to <b>" + esc(email) + "</b>. Open the email <b>on this phone</b> and tap the link — RoCo Hunt opens signed in. Can take a minute; check spam." + (IS_IOS && IS_STANDALONE ? " On iPhone the link opens in Safari: tap <b>Copy sign-in for home-screen app</b> there, then come back and tap <b>Paste sign-in from Safari</b>." : ""); n.style.display = "block";
         el.textContent = "Send a new link";
       } catch(err){ toast(/rate|too many|seconds/i.test(err.message) ? "Too many emails right now — wait a bit and try again" : "Couldn't send link: " + err.message, 5000); el.textContent = "Email me a sign-in link"; }
       el.disabled = false;
@@ -1143,6 +1174,27 @@ document.addEventListener("click", async e => {
       break;
     }
     case "sync-now": closeSheet(); syncNow(true); break;
+    case "xfer-copy": {
+      const link = transferLink();
+      try {
+        await navigator.clipboard.writeText(link);
+        // Hand the sign-in over: Safari stops using it so the two never fight over the same session
+        auth = null; saveAuth(); updateSyncChip();
+        openSheet(`<h2>📋 Copied</h2><p>Now open <b>RoCo Hunt from your Home Screen</b>, tap <b>⚙️</b>, then <b>📋 Paste sign-in from Safari</b>.</p><p class="muted">Safari has handed its sign-in to the app.</p><div class="row"><button class="btn" data-act="sheet-cancel">Close</button></div>`);
+      } catch(err){
+        $("#sheet").insertAdjacentHTML("beforeend", `<label>Couldn't copy automatically. Press and hold this box, Select All, Copy:</label><textarea readonly>${esc(link)}</textarea>`);
+      }
+      break;
+    }
+    case "paste-clip": {
+      let txt = "";
+      try { txt = await navigator.clipboard.readText(); } catch(e){}
+      if (!/#setup=|access_token=|\/auth\/v1\/verify/.test(txt || "")){
+        toast("Nothing to paste yet. In Safari, tap Copy sign-in for home-screen app first.", 6000); break;
+      }
+      $("#sPaste").value = txt;
+    }
+    // falls through to use the pasted link
     case "paste-link": {
       const txt = ($("#sPaste").value || "").trim();
       const found = txt.match(/https?:\/\/\S+/);
