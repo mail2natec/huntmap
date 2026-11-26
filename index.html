@@ -607,7 +607,7 @@ function showMarkPopup(id, lngLat){
   openPopup(lngLat, `<div class="pop"><h4>${t.e} ${esc(m.name || t.label)}</h4>
     ${m.private ? `<div class="k">🔒 Private — only on this phone</div>` : ""}<div class="k">${esc(t.label)}${m.by && !m.private ? " · added by "+esc(m.by) : ""}${m.created ? " · "+fmtDate(m.created) : ""}</div>
     ${m.notes ? `<div class="note">${esc(m.notes)}</div>` : ""}${extra}${coordTxt}
-    <div class="row" style="margin-top:10px"><button class="btn small" data-act="edit" data-id="${esc(id)}">Edit</button><button class="btn small danger" data-act="del" data-id="${esc(id)}">Delete</button></div></div>`);
+    <div class="row" style="margin-top:10px"><button class="btn small" data-act="edit" data-id="${esc(id)}">Edit</button></div></div>`);
 }
 
 /* ---------- map clicks ---------- */
