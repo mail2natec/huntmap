@@ -283,8 +283,8 @@ map.on("load", () => {
   map.addLayer({id:"wma-casing", type:"line", source:"wma", paint:{"line-color":"#00262e","line-opacity":0.6,"line-width":["interpolate",["linear"],["zoom"],10,3.5,16,6.5]}});
   map.addLayer({id:"wma-line", type:"line", source:"wma", paint:{"line-color":"#22e4ff","line-width":["interpolate",["linear"],["zoom"],10,2,16,4],"line-dasharray":[3,1.5]}});
 
-  map.addLayer({id:"parcels-fill", type:"fill", source:"parcels", paint:{"fill-color":"#000","fill-opacity":0.01}});
-  map.addLayer({id:"parcels-line", type:"line", source:"parcels", paint:{"line-color":"#ffd400","line-opacity":0.9,"line-width":["interpolate",["linear"],["zoom"],13,0.8,17,2.2]}});
+  map.addLayer({id:"parcels-fill", type:"fill", source:"parcels", minzoom:CFG.parcelMinZoom, paint:{"fill-color":"#000","fill-opacity":0.01}});
+  map.addLayer({id:"parcels-line", type:"line", source:"parcels", minzoom:CFG.parcelMinZoom, paint:{"line-color":"#ffd400","line-opacity":0.9,"line-width":["interpolate",["linear"],["zoom"],13,0.8,17,2.2]}});
 
   map.addLayer({id:"ours-fill", type:"fill", source:"ours", paint:{"fill-color":"#000","fill-opacity":0.01}});
   map.addLayer({id:"ours-line", type:"line", source:"ours", paint:{"line-color":"#ff8a1f","line-width":["interpolate",["linear"],["zoom"],11,2,17,4.5]}});
