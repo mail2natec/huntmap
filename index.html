@@ -226,10 +226,16 @@ function activateGroup(id, label){
   if (!groups.list[id]) groups.list[id] = {label: label || ("Group " + (groupCount() + 1))};
   groups.active = id; saveGroups();
 }
+const normUrl = u => String(u || "").replace(/\/+$/,"");
+// Which sync project issued a sign-in token (its "iss" claim), e.g. https://xxxx.supabase.co
+function tokenUrl(t){
+  try { return normUrl((JSON.parse(decodeURIComponent(escape(atob(t.split(".")[1].replace(/-/g,"+").replace(/_/g,"/"))))).iss || "").replace(/\/auth\/v1\/?$/,"")); }
+  catch(e){ return ""; }
+}
 function groupIdForUrl(url){
   for (const id of Object.keys(groups.list)){
     const u = id === groups.active ? settings.url : ((LS.get("hm_g_" + id, {}) || {}).settings || {}).url;
-    if (u && u === url) return id;
+    if (u && normUrl(u) === normUrl(url)) return id;
   }
   return null;
 }
@@ -254,6 +260,16 @@ function groupIdForUrl(url){
     if (msg.length) setTimeout(()=>toast("Setup done: " + msg.join(" & ") + " ✔", 3500), 800);
   } catch(e){ setTimeout(()=>toast("That setup link didn't work"), 800); }
   history.replaceState(null, "", location.pathname + location.search);
+})();
+// A sign-in saved under the wrong group (e.g. an email link tapped while another group was open):
+// hand it to the group it belongs to, and never use it here.
+(function fixMisfiledSignIn(){
+  if (!auth || !auth.access_token || !settings.url) return;
+  const u = tokenUrl(auth.access_token);
+  if (!u || u === normUrl(settings.url)) return;
+  const id = groupIdForUrl(u);
+  if (id && id !== groups.active){ const g = LS.get("hm_g_" + id, {}) || {}; if (!g.auth){ g.auth = auth; LS.set("hm_g_" + id, g); } }
+  auth = null; saveAuth();
 })();
 // A setup link opened in a tab that already had the app open only changes the hash: reload to apply it.
 window.addEventListener("hashchange", () => { if (/^#setup=|[#&](access_token|error)=/.test(location.hash)) location.reload(); });
@@ -901,11 +917,19 @@ function readAuthHash(){
   history.replaceState(null, "", location.pathname + location.search);
   if (h.get("error")){ setTimeout(() => toast("Sign-in link problem: " + (h.get("error_description") || h.get("error")).replace(/\+/g," ") + ". Request a new link.", 6000), 800); return true; }
   const at = h.get("access_token");
+  // The emailed link may be for a group other than the one open right now: switch to that group first
+  const iss = tokenUrl(at);
+  if (iss && settings.url && iss !== normUrl(settings.url)){
+    const gid = groupIdForUrl(iss);
+    if (gid){ activateGroup(gid); var switchedGroup = true; }
+    else { setTimeout(() => toast("That sign-in link is for a group not set up on this phone. Open its setup link first.", 6000), 800); return true; }
+  }
   auth = {access_token: at, refresh_token: h.get("refresh_token"), expires_at: Date.now() + (+h.get("expires_in") || 3600) * 1000, email: jwtEmail(at) || settings.email || ""};
   saveAuth();
   if (!settings.name && auth.email){ settings.name = auth.email.split("@")[0]; }
   settings.linkSentTo = ""; saveSettings();
   Object.keys(marks).forEach(k => dirty.add(k)); saveDirty();   // share marks made before signing in
+  if (switchedGroup){ location.reload(); return true; }   // reopen showing the group just signed into
   setTimeout(() => toast("Signed in as " + auth.email + " ✔", 3500), 800);
   return true;
 }
