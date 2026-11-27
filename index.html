@@ -1118,7 +1118,7 @@ function openWeather(){
 }
 $("#wxChip").addEventListener("click", () => openWeather());
 renderWxChip();
-map.on("load", () => setTimeout(() => loadWeather(false), 1500));
+setTimeout(() => loadWeather(false), 2500);   // doesn't wait for the map, so weather shows even if imagery is slow
 setInterval(() => { if (document.visibilityState === "visible") loadWeather(false); }, 10 * 60000);
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") loadWeather(false); });
 
