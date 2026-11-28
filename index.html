@@ -1201,6 +1201,15 @@ function showTransferOffer(){
     <div class="row"><button class="btn primary" data-act="xfer-copy">Copy sign-in for home-screen app</button></div>
     <div class="row"><button class="btn" data-act="sheet-cancel">I use RoCo Hunt in Safari, close</button></div>`);
 }
+// iPhone home-screen icon not set up yet: show the one-button welcome instead of making people find ⚙️
+function showWelcome(){
+  openSheet(`<h2>Welcome to RoCo Hunt</h2>
+    <p>1. Open your setup link in <b>Safari</b> and sign in.<br>2. Tap <b>Copy sign-in for home-screen app</b>.<br>3. Come back here and tap the button below.</p>
+    <input type="hidden" id="sPaste">
+    <div class="row"><button class="btn primary" data-act="paste-clip" style="padding:14px">📋 Paste sign-in from Safari</button></div>
+    <div class="row"><button class="btn" data-act="sheet-cancel">Not now</button></div>`);
+}
+if (IS_IOS && IS_STANDALONE && !(sbConfigured() && auth)) setTimeout(showWelcome, 900);
 try {
   if (sessionStorage.getItem("hm_offer_xfer")){
     sessionStorage.removeItem("hm_offer_xfer");
