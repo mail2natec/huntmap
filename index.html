@@ -181,12 +181,15 @@ const POINT_TYPES = [
 ];
 const LINE_TYPES = [
   {id:"logroad", e:"🟫", label:"Logging road", color:"#c08a4a", dash:false},
+  {id:"gravel", e:"⬜", label:"Gravel road", color:"#ece6d6", dash:false},
   {id:"trail", e:"🦌", label:"Deer trail", color:"#ff9d2e", dash:true},
   {id:"access", e:"🥾", label:"Access route", color:"#3fd0ff", dash:true},
   {id:"boundary", e:"🚩", label:"Line/flagging", color:"#ff4fd8", dash:false},
   {id:"track", e:"👣", label:"GPS track", color:"#ffe14d", dash:true},
   {id:"lineother", e:"〰️", label:"Other", color:"#ffffff", dash:false}
 ];
+const ROAD_TYPES = ["logroad", "gravel"];
+const roadShown = m => !(m.type === "logroad" && settings.showLogRoads === false) && !(m.type === "gravel" && settings.showGravel === false);
 const typeInfo = id => POINT_TYPES.find(t=>t.id===id) || LINE_TYPES.find(t=>t.id===id) || POINT_TYPES[POINT_TYPES.length-1];
 
 /* ================= STORAGE ================= */
@@ -195,7 +198,7 @@ const LS = {
   set(k, v){ try{ localStorage.setItem(k, JSON.stringify(v)); }catch(e){} }
 };
 let marks = LS.get("hm_marks", {});
-let settings = Object.assign({name:"", url:"", key:"", parcels:[], homeBounds:null, basemap:"sat", showParcels:true, showWma:true, showOurs:true}, LS.get("hm_settings", {}));
+let settings = Object.assign({name:"", url:"", key:"", parcels:[], homeBounds:null, basemap:"sat", showParcels:true, showWma:true, showOurs:true, showLogRoads:true, showGravel:true, showRoadNames:true}, LS.get("hm_settings", {}));
 const ourParcels = () => settings.parcels || [];
 let dirty = new Set(LS.get("hm_dirty", []));
 let track = LS.get("hm_track", null);   // in-progress GPS track {pts:[[lng,lat]...], start}
@@ -327,6 +330,7 @@ const map = new maplibregl.Map({
   attributionControl: {compact: true},
   style: {
     version: 8,
+    glyphs: "https://tiles.openfreemap.org/fonts/{fontstack}/{range}.pbf",   // font for road names
     sources: {
       sat:  {type:"raster", tiles:["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"], tileSize:256, maxzoom:19, attribution:"Imagery © Esri, Maxar, Earthstar Geographics"},
       topo: {type:"raster", tiles:["https://basemap.nationalmap.gov/arcgis/rest/services/USGSTopo/MapServer/tile/{z}/{y}/{x}"], tileSize:256, maxzoom:16, attribution:"USGS The National Map"},
@@ -383,8 +387,14 @@ map.on("load", () => {
   colorExpr.push("#ffffff");
   const dashIds = LINE_TYPES.filter(t=>t.dash).map(t=>t.id);
   map.addLayer({id:"lines-casing", type:"line", source:"lines", layout:{"line-cap":"round","line-join":"round"}, paint:{"line-color":"#000","line-opacity":0.55,"line-width":["interpolate",["linear"],["zoom"],12,3.5,16,7]}});
-  map.addLayer({id:"lines-solid", type:"line", source:"lines", filter:["!", ["in", ["get","type"], ["literal", dashIds]]], layout:{"line-cap":"round","line-join":"round"}, paint:{"line-color":colorExpr,"line-width":["interpolate",["linear"],["zoom"],12,2,16,4]}});
-  map.addLayer({id:"lines-dash", type:"line", source:"lines", filter:["in", ["get","type"], ["literal", dashIds]], layout:{"line-join":"round"}, paint:{"line-color":colorExpr,"line-width":["interpolate",["linear"],["zoom"],12,2,16,4],"line-dasharray":[2,1.2]}});
+  map.addLayer({id:"lines-solid", type:"line", source:"lines", filter:["all", ["!", ["in", ["get","type"], ["literal", dashIds]]], ["!=", ["get","draft"], true]], layout:{"line-cap":"round","line-join":"round"}, paint:{"line-color":colorExpr,"line-width":["interpolate",["linear"],["zoom"],12,2,16,4]}});
+  map.addLayer({id:"lines-dash", type:"line", source:"lines", filter:["any", ["in", ["get","type"], ["literal", dashIds]], ["==", ["get","draft"], true]], layout:{"line-join":"round"}, paint:{"line-opacity":["case", ["==", ["get","draft"], true], 0.8, 1], "line-color":colorExpr,"line-width":["interpolate",["linear"],["zoom"],12,2,16,4],"line-dasharray":[2,1.2]}});
+  // Road names along logging and gravel roads (zoomed in)
+  map.addLayer({id:"road-names", type:"symbol", source:"lines", minzoom:14,
+    filter:["all", ["in", ["get","type"], ["literal", ROAD_TYPES]], ["!=", ["get","name"], ""]],
+    layout:{"symbol-placement":"line", "text-field":["get","name"], "text-font":["Noto Sans Bold"], "text-size":12, "text-offset":[0,-0.9], "text-max-angle":45,
+      "visibility": settings.showRoadNames === false ? "none" : "visible"},
+    paint:{"text-color":"#ffffff", "text-halo-color":"#000000", "text-halo-width":1.6}});
   map.addLayer({id:"lines-hit", type:"line", source:"lines", paint:{"line-color":"#000","line-opacity":0.01,"line-width":22}});
 
   map.addLayer({id:"draft-line", type:"line", source:"draft", filter:["==",["geometry-type"],"LineString"], paint:{"line-color":"#fff","line-width":3,"line-dasharray":[1.5,1]}});
@@ -408,7 +418,7 @@ let glLost = false;
 map.on("webglcontextlost", () => { glLost = true; });
 function recoverMap(){
   if (!glLost || document.visibilityState !== "visible") return;
-  if ((mode === "line" || mode === "measure") && draft.length){ clearTimeout(recoverMap._t); recoverMap._t = setTimeout(recoverMap, 3000); return; }
+  if ((mode === "line" || mode === "measure" || mode === "extend") && draft.length){ clearTimeout(recoverMap._t); recoverMap._t = setTimeout(recoverMap, 3000); return; }
   glLost = false; location.reload();
 }
 map.on("webglcontextrestored", recoverMap);
@@ -537,6 +547,7 @@ function applyLayerVis(){
   vis(["parcels-fill","parcels-line","sel-line"], settings.showParcels);
   vis(["wma-fill","wma-casing","wma-line"], settings.showWma);
   vis(["ours-fill","ours-line"], settings.showOurs);
+  vis(["road-names"], settings.showRoadNames !== false);
   loadParcels();
 }
 function set3D(on){
@@ -558,8 +569,8 @@ function renderMarks(){
       el.className = "pin" + (m.private ? " priv" : ""); el.textContent = typeInfo(m.type).e; el.title = m.name || typeInfo(m.type).label;
       el.addEventListener("click", ev => { ev.stopPropagation(); if (mode) return; showMarkPopup(m.id, m.coords); });
       domMarkers.push(new maplibregl.Marker({element:el}).setLngLat(m.coords).addTo(map));
-    } else if (m.kind === "line" && m.coords && m.coords.length > 1){
-      lines.push({type:"Feature", properties:{id:m.id, type:m.type}, geometry:{type:"LineString", coordinates:m.coords}});
+    } else if (m.kind === "line" && m.coords && m.coords.length > 1 && roadShown(m)){
+      lines.push({type:"Feature", properties:{id:m.id, type:m.type, name:m.name || "", draft:!!m.draft && ROAD_TYPES.includes(m.type)}, geometry:{type:"LineString", coordinates:m.coords}});
     }
   });
   if (map.getSource("lines")) map.getSource("lines").setData({type:"FeatureCollection", features:lines});
@@ -620,7 +631,7 @@ function showMarkPopup(id, lngLat){
   if (m.kind === "point" && myPos){ const d = haversine(myPos, m.coords); extra = `<div class="k">From you: ${fmtDist(d)} ${bearing(myPos, m.coords)}</div>`; }
   const coordTxt = m.kind==="point" ? `<div class="k">${m.coords[1].toFixed(5)}, ${m.coords[0].toFixed(5)}</div>` : "";
   openPopup(lngLat, `<div class="pop"><h4>${t.e} ${esc(m.name || t.label)}</h4>
-    ${m.private ? `<div class="k">🔒 Private — only on this phone</div>` : ""}<div class="k">${esc(t.label)}${m.by && !m.private ? " · added by "+esc(m.by) : ""}${m.created ? " · "+fmtDate(m.created) : ""}</div>
+    ${m.private ? `<div class="k">🔒 Private — only on this phone</div>` : ""}<div class="k">${esc(t.label)}${m.draft && ROAD_TYPES.includes(m.type) ? " · ✏️ Draft" : ""}${m.by && !m.private ? " · added by "+esc(m.by) : ""}${m.created ? " · "+fmtDate(m.created) : ""}</div>
     ${m.notes ? `<div class="note">${esc(m.notes)}</div>` : ""}${extra}${coordTxt}
     <div class="row" style="margin-top:10px"><button class="btn small" data-act="edit" data-id="${esc(id)}">Edit</button></div></div>`);
 }
@@ -629,6 +640,13 @@ function showMarkPopup(id, lngLat){
 map.on("click", e => {
   const ll = [e.lngLat.lng, e.lngLat.lat];
   if (mode === "line" || mode === "measure"){ draft.push(ll); updateDraft(); return; }
+  if (mode === "extend" && extendTarget){
+    if (!draft.length){   // first tap decides which end to grow from
+      const c = extendTarget.coords;
+      extendAtStart = haversine(ll, c[0]) < haversine(ll, c[c.length - 1]);
+    }
+    draft.push(ll); updateDraft(); return;
+  }
   if (mode === "pin" || mode === "track") return;
   const lineHit = map.queryRenderedFeatures(e.point, {layers:["lines-hit"]})[0];
   if (lineHit){ showMarkPopup(lineHit.properties.id, e.lngLat); return; }
@@ -662,21 +680,26 @@ map.on("click", e => {
 });
 
 /* ================= MODES ================= */
-let mode = null;          // null | pin | line | measure | track
+let mode = null;          // null | pin | line | measure | track | extend
+let extendTarget = null, extendAtStart = false;   // the line being extended, and which end
 let draft = [];
 function setMode(m){
   mode = m; draft = (m === "track" && track) ? track.pts : []; updateDraft();
   document.body.classList.toggle("moding", !!m);
   document.querySelectorAll("#toolbar button").forEach(b => { b.classList.toggle("on", b.dataset.tool === m); b.classList.toggle("rec", b.dataset.tool === "track" && !!track); });
   $("#crosshair").style.display = m === "pin" ? "block" : "none";
-  map.getCanvas().style.cursor = (m === "line" || m === "measure") ? "crosshair" : "";
+  map.getCanvas().style.cursor = (m === "line" || m === "measure" || m === "extend") ? "crosshair" : "";
   if (popup) popup.remove();
   renderActionBar();
 }
 function updateDraft(){
   if (!map.getSource("draft")) return;
   const feats = draft.map(c => ({type:"Feature", properties:{}, geometry:{type:"Point", coordinates:c}}));
-  if (draft.length > 1) feats.push({type:"Feature", properties:{}, geometry:{type:"LineString", coordinates:draft}});
+  if (mode === "extend" && extendTarget && draft.length){
+    const c = extendTarget.coords;
+    const join = extendAtStart ? [c[0]].concat(draft) : [c[c.length - 1]].concat(draft);
+    feats.push({type:"Feature", properties:{}, geometry:{type:"LineString", coordinates:join}});
+  } else if (draft.length > 1) feats.push({type:"Feature", properties:{}, geometry:{type:"LineString", coordinates:draft}});
   map.getSource("draft").setData({type:"FeatureCollection", features:feats});
   renderActionBar();
 }
@@ -691,6 +714,11 @@ function renderActionBar(){
   } else if (mode === "line"){
     bar.innerHTML = `<div class="msg">Tap the map to trace the line · <b>${draft.length}</b> pts · <b>${len}</b></div>
       <button class="btn" data-act="undo">Undo</button><button class="btn primary" data-act="line-done" ${draft.length<2?"disabled":""}>Finish</button><button class="btn" data-act="cancel">Cancel</button>`;
+  } else if (mode === "extend"){
+    const c = extendTarget ? extendTarget.coords : [];
+    const total = extendTarget ? fmtDist(pathLen(c) + (draft.length ? pathLen((extendAtStart ? [c[0]] : [c[c.length-1]]).concat(draft)) : 0)) : "—";
+    bar.innerHTML = `<div class="msg">✏️ Extending <b>${esc((extendTarget && extendTarget.name) || "line")}</b> · tap along the road, starting near either end · <b>${draft.length}</b> new pts · <b>${total}</b></div>
+      <button class="btn" data-act="undo">Undo</button><button class="btn primary" data-act="extend-done" ${draft.length<1?"disabled":""}>Done</button><button class="btn" data-act="cancel">Cancel</button>`;
   } else if (mode === "track"){
     const mins = track ? Math.round((Date.now() - track.start)/60000) : 0;
     const dur = mins >= 60 ? Math.floor(mins/60) + " h " + (mins%60) + " min" : mins + " min";
@@ -755,6 +783,10 @@ function openMarkForm(m){
     <label>Name</label><input type="text" id="fName" maxlength="80" placeholder="e.g. Ridge ladder stand" value="${esc(m.name||"")}">
     <label>Notes</label><textarea id="fNotes" placeholder="Wind, card checks, sightings…">${esc(m.notes||"")}</textarea>
     <div class="toggle" style="border:0;margin-top:6px"><span>🔒 Private <span class="muted">— stays on this phone, never shared</span></span><input type="checkbox" id="fPriv" ${m.private?"checked":""}></div>
+    ${m.kind==="line" ? `<div id="roadStatus" style="display:${ROAD_TYPES.includes(m.type) ? "block" : "none"}"><label>Road status</label>
+      <div class="seg" id="draftSeg"><button data-draft="1" class="${m.draft ? "sel" : ""}">✏️ Draft</button><button data-draft="0" class="${m.draft ? "" : "sel"}">✅ Finished</button></div>
+      <p class="muted" style="margin:6px 0 0">Drafts show dashed until finished.</p></div>` : ""}
+    ${m.kind==="line" && !isNew ? `<div class="row"><button class="btn" data-act="extend">➕ Extend line</button></div>` : ""}
     ${m.kind==="line" ? `<div class="muted" style="margin-top:8px">Length: ${fmtDist(pathLen(m.coords))}</div>` : `<div class="muted" style="margin-top:8px">${m.coords[1].toFixed(5)}, ${m.coords[0].toFixed(5)}</div>`}
     <div class="row"><button class="btn" data-act="sheet-cancel">Cancel</button><button class="btn primary" data-act="mark-save">Save</button></div>
     ${!isNew ? `<div class="row"><button class="btn danger" data-act="del" data-id="${esc(m.id)}">Delete</button></div>` : ""}`);
@@ -762,13 +794,23 @@ function openMarkForm(m){
     const b = e.target.closest("button[data-type]"); if (!b) return;
     editing.type = b.dataset.type;
     document.querySelectorAll("#typegrid button").forEach(x => x.classList.toggle("sel", x === b));
+    if ($("#roadStatus")) $("#roadStatus").style.display = ROAD_TYPES.includes(editing.type) ? "block" : "none";
+  });
+  if ($("#draftSeg")) $("#draftSeg").addEventListener("click", e => {
+    const b = e.target.closest("button[data-draft]"); if (!b) return;
+    editing.draft = b.dataset.draft === "1";
+    document.querySelectorAll("#draftSeg button").forEach(x => x.classList.toggle("sel", x === b));
   });
 }
-function saveMarkForm(){
-  if (!editing) return;
+function readMarkForm(){
   editing.name = $("#fName").value.trim();
   editing.notes = $("#fNotes").value.trim();
   editing.private = $("#fPriv").checked;
+  if (!ROAD_TYPES.includes(editing.type)) delete editing.draft;
+}
+function saveMarkForm(){
+  if (!editing) return;
+  readMarkForm();
   if (!editing.created) editing.created = Date.now();
   const priv = editing.private;
   upsertMark(editing); editing = null; closeSheet(); toast(priv ? "Saved privately on this phone" : "Saved");
@@ -801,6 +843,7 @@ function gotoMark(id){
   else { const b = new maplibregl.LngLatBounds(m.coords[0], m.coords[0]); m.coords.forEach(c=>b.extend(c)); map.fitBounds(b, {padding:80, maxZoom:17}); setTimeout(()=>showMarkPopup(id, m.coords[Math.floor(m.coords.length/2)]), 900); }
 }
 
+const roadCount = t => liveMarks().filter(m => m.kind === "line" && m.type === t).length;
 function openLayers(){
   openSheet(`<h2>Map layers</h2>
     <label>Basemap</label>
@@ -809,6 +852,10 @@ function openLayers(){
     <div class="toggle"><span>🟨 Property lines &amp; owners</span><input type="checkbox" id="tPar" ${settings.showParcels?"checked":""}></div>
     <div class="toggle"><span>🟦 Public hunting land (WMA, cyan outline)</span><input type="checkbox" id="tWma" ${settings.showWma?"checked":""}></div>
     <div class="toggle"><span>🟧 Hunting land outline</span><input type="checkbox" id="tOurs" ${settings.showOurs?"checked":""}></div>
+    <h3>Roads</h3>
+    <div class="toggle"><span>🟫 Logging roads <span class="muted">· ${roadCount("logroad")}</span></span><input type="checkbox" id="tLog" ${settings.showLogRoads!==false?"checked":""}></div>
+    <div class="toggle"><span>⬜ Gravel roads <span class="muted">· ${roadCount("gravel")}</span></span><input type="checkbox" id="tGrav" ${settings.showGravel!==false?"checked":""}></div>
+    <div class="toggle"><span>🔤 Road names</span><input type="checkbox" id="tNames" ${settings.showRoadNames!==false?"checked":""}></div>
     <p class="muted">In 3D, drag with two fingers to tilt and twist to rotate.</p>
     <div class="row"><button class="btn" data-act="home">Zoom to hunting land</button><button class="btn" data-act="sheet-cancel">Close</button></div>`);
   $("#bmSeg").addEventListener("click", e => { const b = e.target.closest("button[data-bm]"); if(!b) return; settings.basemap = b.dataset.bm; saveSettings(); applyBasemap(); document.querySelectorAll("#bmSeg button").forEach(x=>x.classList.toggle("sel", x===b)); });
@@ -816,6 +863,9 @@ function openLayers(){
   $("#tPar").addEventListener("change", e => { settings.showParcels = e.target.checked; saveSettings(); applyLayerVis(); });
   $("#tWma").addEventListener("change", e => { settings.showWma = e.target.checked; saveSettings(); applyLayerVis(); });
   $("#tOurs").addEventListener("change", e => { settings.showOurs = e.target.checked; saveSettings(); applyLayerVis(); });
+  $("#tLog").addEventListener("change", e => { settings.showLogRoads = e.target.checked; saveSettings(); renderMarks(); });
+  $("#tGrav").addEventListener("change", e => { settings.showGravel = e.target.checked; saveSettings(); renderMarks(); });
+  $("#tNames").addEventListener("change", e => { settings.showRoadNames = e.target.checked; saveSettings(); applyLayerVis(); });
 }
 
 function openSettings(){
@@ -1180,7 +1230,28 @@ document.addEventListener("click", async e => {
   const el = e.target.closest("[data-act]"); if (!el) return;
   const act = el.dataset.act, id = el.dataset.id;
   switch (act){
-    case "cancel": setMode(null); break;
+    case "cancel": {
+      const back = mode === "extend" ? extendTarget : null;
+      setMode(null); extendTarget = null;
+      if (back) openMarkForm(back);   // back to the edit screen, unchanged
+      break;
+    }
+    case "extend": {
+      if (!editing) break;
+      readMarkForm();
+      extendTarget = editing; editing = null; closeSheet();
+      setMode("extend");
+      toast("Tap along the road, starting near the end you want to extend", 4000);
+      break;
+    }
+    case "extend-done": {
+      if (!extendTarget || !draft.length) break;
+      const m = extendTarget, add = draft.slice();
+      m.coords = extendAtStart ? add.reverse().concat(m.coords) : m.coords.concat(add);
+      extendTarget = null; setMode(null);
+      openMarkForm(m); toast("Added " + add.length + " points. Tap Save to keep them.", 3500);
+      break;
+    }
     case "undo": draft.pop(); updateDraft(); break;
     case "clear": draft = []; updateDraft(); break;
     case "pin-here": { const c = map.getCenter(); const m = {id:uid(), kind:"point", type:"stand", coords:[c.lng, c.lat]}; setMode(null); openMarkForm(m); break; }
